@@ -1,0 +1,43 @@
+# ===== Сборка =====
+out/
+build/
+[Bb]uild/
+*.obj
+*.o
+*.exe
+*.lib
+*.a
+*.pdb
+*.ilk
+*.exp
+
+# ===== Visual Studio / IDE =====
+.vs/
+.vscode/
+*.user
+*.suo
+CMakeSettings.json
+CMakeUserPresets.json
+
+# ===== CMake =====
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# ===== Архивы / временное =====
+*.rar
+*.zip
+*.7z
+*.log
+*.tmp
+
+# ===== ОС =====
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# ===== Локальные настройки инструментов =====
+.claude/
+
+# ===== Личные документы (резюме, заметки к собесу, планы) — не для публики =====
+docs/
