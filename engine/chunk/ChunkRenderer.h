@@ -19,6 +19,10 @@ public:
     void updateIndices(const uint8_t* data);
     void render(const Camera2D& camera, const glm::ivec2& chunkOffset, float tileSize);
 
+    // GL VBO для CUDA-OpenGL interop: CUDA пишет результат симуляции напрямую
+    // в этот буфер, минуя CPU roundtrip через glBufferSubData.
+    unsigned int getInstanceVBO() const { return instanceVBO; }
+
     static void setGlobalPalette(const std::vector<glm::vec3>& palette);
     static void shutdownStatics();
 

@@ -18,14 +18,19 @@ LifeLikeAutomaton::LifeLikeAutomaton(int totalWidth, int totalHeight, int chunkS
 void LifeLikeAutomaton::simulateChunk(Chunk& chunk) {
     const int S = chunk.chunkSize;
 
-    // Расширенная окрестность (S+2)x(S+2) с данными соседних чанков. Эту часть
-    // (сбор окрестности из renderBuffer соседей) считает движок одинаково для
-    // CPU и GPU — на устройство уходит уже готовый буфер.
     std::vector<uint8_t> ext = getExtendedNeighborhood(chunk, 1);
     const int extW = S + 2;
 
     std::vector<uint8_t> next(static_cast<size_t>(S) * S, 0);
-    m_backend->simulate(ext.data(), extW, next.data(), S, m_rule);
+
+    // Если бэкенд поддерживает CUDA-GL interop — передаём VBO чанка.
+    // Тогда GPU пишет результат напрямую в GL VBO (D2D), минуя glBufferSubData.
+    // renderBuffer по-прежнему нужен для border exchange с соседями, поэтому
+    // D2H в next делается в любом случае.
+    unsigned int vbo = m_backend->supportsGLInterop()
+                       ? chunk.renderer->getInstanceVBO()
+                       : 0u;
+    m_backend->simulateDirect(ext.data(), extW, next.data(), S, m_rule, vbo);
 
     std::lock_guard<std::mutex> lock(chunk.chunkMutex);
     std::copy(next.begin(), next.end(), chunk.simBuffer.begin());

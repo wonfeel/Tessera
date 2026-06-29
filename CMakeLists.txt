@@ -107,7 +107,7 @@ if(FE_USE_CUDA)
         endif()
         # Архитектуры GPU. 86 = Ampere (RTX 30xx). При желании расширьте список.
         if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-            set(CMAKE_CUDA_ARCHITECTURES 75 86)
+            set(CMAKE_CUDA_ARCHITECTURES 86-real)
         endif()
         set(CUDA_BACKEND_SRC "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/CudaLifeBackend.cu")
         message(STATUS "CUDA found – GPU simulation backend enabled (arch ${CMAKE_CUDA_ARCHITECTURES})")
@@ -174,6 +174,15 @@ foreach(DEMO_DIR ${DEMO_DIRS})
                 "$<TARGET_FILE_DIR:${DEMO_NAME}>/Shaders"
                 COMMENT "Copying shaders for ${DEMO_NAME}"
             )
+            # Копирование паттернов RLE
+            if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patterns")
+                add_custom_command(TARGET ${DEMO_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${CMAKE_CURRENT_SOURCE_DIR}/patterns"
+                    "$<TARGET_FILE_DIR:${DEMO_NAME}>/patterns"
+                    COMMENT "Copying patterns for ${DEMO_NAME}"
+                )
+            endif()
             message(STATUS "Added demo: ${DEMO_NAME} (+ ${DEMO_EXTRA_SOURCES})")
         endif()
     endif()
