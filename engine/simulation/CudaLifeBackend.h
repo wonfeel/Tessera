@@ -22,18 +22,30 @@ public:
                   uint8_t* out, int S,
                   const LifeRule& rule) override;
 
+    void simulateDirect(const uint8_t* ext, int extW,
+                        uint8_t* out, int S,
+                        const LifeRule& rule,
+                        unsigned int glVBO) override;
+
+    bool supportsGLInterop() const override { return true; }
     const char* name() const override { return "CUDA"; }
 
-    // true, если на машине есть видимое CUDA-устройство. Используется фабрикой
-    // для выбора бэкенда. Безопасно вызывать всегда.
     static bool isAvailable();
 
 private:
     void ensureBuffers(size_t extBytes, size_t outBytes);
+    bool runKernel(const uint8_t* ext, int extW, int S, const LifeRule& rule);
 
-    std::mutex m_mutex;          // сериализует доступ к device-буферам
-    void* m_dExt = nullptr;      // device: расширенная окрестность
-    void* m_dOut = nullptr;      // device: результат
+    std::mutex m_mutex;
+    void* m_dExt = nullptr;
+    void* m_dOut = nullptr;
     size_t m_extCapacity = 0;
     size_t m_outCapacity = 0;
+
+    // CUDA Graphics Resource для GL interop (регистрируется лениво по VBO ID).
+    // На Windows WDDM cudaGraphicsGLRegisterBuffer требует GL-контекст на
+    // вызывающем потоке — если регистрация провалилась, interop отключается.
+    void* m_glResource = nullptr;   // cudaGraphicsResource* — храним как void*
+    unsigned int m_registeredVBO = 0;
+    bool m_interopFailed = false;   // после первой ошибки больше не пробуем
 };

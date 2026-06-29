@@ -26,6 +26,20 @@ public:
                           uint8_t* out, int S,
                           const LifeRule& rule) = 0;
 
+    // Версия с CUDA-OpenGL interop: результат пишется параллельно в out (CPU)
+    // и напрямую в GL VBO (glVBO) через D2D-копию, минуя шину PCI-E.
+    // Базовая реализация — просто вызывает simulate() без interop.
+    // glVBO == 0 означает "interop не нужен", поведение идентично simulate().
+    virtual void simulateDirect(const uint8_t* ext, int extW,
+                                uint8_t* out, int S,
+                                const LifeRule& rule,
+                                unsigned int glVBO) {
+        simulate(ext, extW, out, S, rule);
+    }
+
+    // true если бэкенд поддерживает CUDA-GL interop (только CudaLifeBackend).
+    virtual bool supportsGLInterop() const { return false; }
+
     // Человекочитаемое имя бэкенда ("CPU" / "CUDA") — для логов и бенчмарков.
     virtual const char* name() const = 0;
 };
