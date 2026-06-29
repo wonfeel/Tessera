@@ -1,0 +1,5 @@
+#N R-pentomino
+#C One of the most active small patterns in Life.
+#C Produces gliders, blocks, and blinkers over 1103 generations.
+x = 3, y = 3, rule = B3/S23
+b2o$2ob$bo!

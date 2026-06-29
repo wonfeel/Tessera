@@ -4,6 +4,7 @@
 #include "engine/chunk/Chunk.h"
 #include "engine/chunk/ChunkCoord.h"
 #include "engine/graphics/Camera2D.h"
+#include "engine/utils/RleLoader.h"
 #include <unordered_map>
 #include <shared_mutex>
 #include <vector>
@@ -50,6 +51,10 @@ public:
     virtual void commitInitialState();
 
     void setTileDirect(int x, int y, uint8_t state);
+
+    // Штамповать RLE-паттерн с верхним левым углом в (worldX, worldY).
+    // Клетки вне границ мира молча пропускаются.
+    void stampPattern(const RlePattern& pattern, int worldX, int worldY);
     void commitOverlayRender();
     void restoreAllRenderBuffers();
     void clearAllRenderTiles(uint8_t value = 0);

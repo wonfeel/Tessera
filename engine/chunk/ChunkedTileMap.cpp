@@ -248,6 +248,17 @@ void ChunkedTileMap::commitReadyChunks(const Camera2D& camera) {
     }
 }
 
+void ChunkedTileMap::stampPattern(const RlePattern& pattern, int worldX, int worldY) {
+    if (pattern.width <= 0 || pattern.height <= 0) return;
+    for (int py = 0; py < pattern.height; ++py) {
+        for (int px = 0; px < pattern.width; ++px) {
+            uint8_t cell = pattern.cells[py * pattern.width + px];
+            if (cell != 0)
+                setTile(worldX + px, worldY + py, cell);
+        }
+    }
+}
+
 void ChunkedTileMap::simulateActiveChunks() {
     bool expected = false;
     if (!m_simulating.compare_exchange_strong(expected, true)) {
