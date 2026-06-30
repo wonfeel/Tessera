@@ -4,6 +4,11 @@
 #include <ctime>
 #include <sstream>
 #include <iomanip>
+#ifdef FLORA_IMGUI_ENABLED
+#  include <imgui.h>
+#  include <imgui_impl_glfw.h>
+#  include <imgui_impl_opengl3.h>
+#endif
 
 Application::Application(int width, int height, const std::string& title,
     bool showPerformance)
@@ -54,6 +59,26 @@ Application::~Application() {
     }
 }
 
+// ImGui helpers — only compiled when ImGui is available.
+#ifdef FLORA_IMGUI_ENABLED
+static void imguiInit(GLFWwindow* window) {
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;   // don't write imgui.ini next to the exe
+    ImGui::StyleColorsDark();
+    // install_callbacks=false: we feed input manually to avoid calling
+    // glfwSet*Callback from the render thread (GLFW limitation on some platforms).
+    ImGui_ImplGlfw_InitForOpenGL(window, false);
+    ImGui_ImplOpenGL3_Init("#version 460");
+}
+static void imguiShutdown() {
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+}
+#endif
+
 void Application::run() {
     if (!m_window) return;
 
@@ -70,8 +95,15 @@ void Application::run() {
     if (m_renderThread.joinable())
         m_renderThread.join();
 
-    // Теперь контекст свободен, забираем его в главный поток для корректного удаления ресурсов
+    // Render thread has released the GL context — reclaim it in the main thread.
     glfwMakeContextCurrent(m_window);
+
+#ifdef FLORA_IMGUI_ENABLED
+    if (m_imguiReady) {
+        imguiShutdown();
+        m_imguiReady = false;
+    }
+#endif
 
     onDestroy();
 
@@ -106,6 +138,16 @@ void Application::updateLoop() {
 
         onUpdate(dt);
         onCameraUpdate(dt);
+
+        // Push mouse state to render thread for ImGui consumption.
+        float mx = 0.f, my = 0.f;
+        m_input.getMousePosition(mx, my);
+        m_imguiMouse.x   = mx;
+        m_imguiMouse.y   = my;
+        m_imguiMouse.btn0 = m_input.isMouseButtonPressed(GLFW_MOUSE_BUTTON_LEFT);
+        m_imguiMouse.btn1 = m_input.isMouseButtonPressed(GLFW_MOUSE_BUTTON_RIGHT);
+        m_imguiMouse.btn2 = m_input.isMouseButtonPressed(GLFW_MOUSE_BUTTON_MIDDLE);
+        m_imguiMouse.scroll = m_input.getScrollDelta();
     }
 }
 
@@ -131,21 +173,54 @@ void Application::renderLoop() {
 
         glClear(GL_COLOR_BUFFER_BIT);
         onRender(cameraCopy);
+
+#ifdef FLORA_IMGUI_ENABLED
+        // Lazy init — GL context is current here in the render thread.
+        if (!m_imguiReady) {
+            imguiInit(m_window);
+            m_imguiReady = true;
+        }
+
+        // Feed mouse input from atomics (written by update thread).
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize  = ImVec2(static_cast<float>(m_width),
+                                  static_cast<float>(m_height));
+        io.MousePos     = ImVec2(m_imguiMouse.x.load(), m_imguiMouse.y.load());
+        io.MouseDown[0] = m_imguiMouse.btn0.load();
+        io.MouseDown[1] = m_imguiMouse.btn1.load();
+        io.MouseDown[2] = m_imguiMouse.btn2.load();
+        io.MouseWheel   = m_imguiMouse.scroll.exchange(0.f);
+        io.DeltaTime    = 1.f / 60.f;
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        onImGui();
+
+        m_imguiWantMouse =
+            ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) ||
+            ImGui::IsAnyItemActive();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+#endif
+
         glfwSwapBuffers(m_window);
 
-        // FPS counting in render thread
-        if (m_showPerformance) {
-            m_renderFrameCount++;
-            double now = glfwGetTime();
-            if (now - m_lastRenderFpsTime >= 0.5) {
-                double elapsed = now - m_lastRenderFpsTime;
-                if (elapsed > 0.0) {
-                    int fps = static_cast<int>(m_renderFrameCount / elapsed);
-                    updatePerformanceDisplay(fps, 0); // CPU не меряем
-                }
-                m_renderFrameCount = 0;
-                m_lastRenderFpsTime = now;
+        // FPS counting in render thread (always, not just when showPerformance).
+        m_renderFrameCount++;
+        double nowFps = glfwGetTime();
+        if (nowFps - m_lastRenderFpsTime >= 0.5) {
+            double elapsed = nowFps - m_lastRenderFpsTime;
+            if (elapsed > 0.0) {
+                int fps = static_cast<int>(m_renderFrameCount / elapsed);
+                m_fps = fps;
+                if (m_showPerformance)
+                    updatePerformanceDisplay(fps, 0);
             }
+            m_renderFrameCount = 0;
+            m_lastRenderFpsTime = nowFps;
         }
     }
 
@@ -167,23 +242,11 @@ void Application::framebufferSizeCallback(GLFWwindow* window, int width, int hei
 }
 
 void Application::onCameraUpdate(float dt) {
-    bool w = m_input.isKeyPressed(GLFW_KEY_W);
-    bool s = m_input.isKeyPressed(GLFW_KEY_S);
-    bool a = m_input.isKeyPressed(GLFW_KEY_A);
-    bool d = m_input.isKeyPressed(GLFW_KEY_D);
-
-    float scroll = m_input.getScrollDelta();
-    float mx = 0.0f, my = 0.0f;
-    if (scroll != 0.0f)
-        m_input.getMousePosition(mx, my);
-
     // Рендер-поток читает m_camera под m_cameraMutex (см. renderLoop),
     // поэтому запись из update-потока тоже должна быть под этим мьютексом,
-    // иначе data race / UB.
+    // иначе data race / UB. Сама раскладка управления живёт в CameraController.
     std::lock_guard<std::mutex> lock(m_cameraMutex);
-    m_camera.processKeyboard(dt, w, s, a, d);
-    if (scroll != 0.0f)
-        m_camera.processScroll(scroll, mx, my);
+    m_cameraController.update(m_input, m_camera, dt);
 }
 
 void Application::updatePerformanceDisplay(int fps, int cpuPercent) {
