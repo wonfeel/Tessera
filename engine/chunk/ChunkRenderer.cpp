@@ -7,6 +7,7 @@
 std::unique_ptr<Shader> ChunkRenderer::s_shader = nullptr;
 unsigned int ChunkRenderer::s_paletteTexture = 0;
 bool ChunkRenderer::s_staticInitialized = false;
+std::vector<glm::vec3> ChunkRenderer::s_palette;
 
 GLint ChunkRenderer::s_locCamera = -1;
 GLint ChunkRenderer::s_locCellSize = -1;
@@ -64,6 +65,8 @@ void ChunkRenderer::initStatics() {
         }
     }
 
+    s_palette = pal;   // запоминаем CPU-копию (нужна для экспорта GIF)
+
     glGenTextures(1, &s_paletteTexture);
     glBindTexture(GL_TEXTURE_1D, s_paletteTexture);
     glTexImage1D(GL_TEXTURE_1D, 0, GL_RGB, PALETTE_SIZE, 0, GL_RGB, GL_FLOAT, pal.data());
@@ -78,8 +81,14 @@ void ChunkRenderer::setGlobalPalette(const std::vector<glm::vec3>& palette) {
     initStatics();
     if (palette.size() != PALETTE_SIZE) return;
 
+    s_palette = palette;   // обновляем CPU-копию вместе с GL-текстурой
+
     glBindTexture(GL_TEXTURE_1D, s_paletteTexture);
     glTexSubImage1D(GL_TEXTURE_1D, 0, 0, PALETTE_SIZE, GL_RGB, GL_FLOAT, palette.data());
+}
+
+const std::vector<glm::vec3>& ChunkRenderer::getGlobalPalette() {
+    return s_palette;
 }
 
 void ChunkRenderer::setupQuad() {

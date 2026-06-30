@@ -3,38 +3,36 @@
 #include "engine/core/TaskScheduler.h"
 #include <algorithm>
 #include <sstream>
+#include <thread>
 #include <glm/glm.hpp>
 
 ChunkedTileMap::ChunkedTileMap(int totalWidth, int totalHeight, int chunkSize, float tileSize)
-    : m_totalWidth(totalWidth), m_totalHeight(totalHeight), m_chunkSize(chunkSize), m_tileSize(tileSize)
+    : m_grid(totalWidth, totalHeight, chunkSize, tileSize),
+      m_sim(m_store, chunkSize, tileSize,
+            [this](Chunk& c) { simulateChunk(c); },
+            [this](const std::vector<ChunkCoord>& coords) { ensureActiveChunks(coords); }),
+      m_renderer(m_store, chunkSize, tileSize)
 {
 }
 
 Chunk* ChunkedTileMap::getOrCreateChunk(ChunkCoord coord) {
-    auto it = m_chunks.find(coord);
-    if (it != m_chunks.end()) return it->second.get();
-
-    glm::ivec2 worldOffset(coord.x() * m_chunkSize, coord.y() * m_chunkSize);
-    auto chunk = createChunk(coord, worldOffset, m_chunkSize, this);
-    Chunk* ptr = chunk.get();
-    m_chunks[coord] = std::move(chunk);
-    return ptr;
+    return m_store.getOrCreateLocked(coord, [this](ChunkCoord c) {
+        int cs = m_grid.chunkSize();
+        glm::ivec2 worldOffset(c.x() * cs, c.y() * cs);
+        return createChunk(c, worldOffset, cs, this);
+    });
 }
 
 Chunk* ChunkedTileMap::getChunk(ChunkCoord coord) {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    auto it = m_chunks.find(coord);
-    return (it != m_chunks.end()) ? it->second.get() : nullptr;
+    return m_store.get(coord);
 }
 
 std::shared_ptr<Chunk> ChunkedTileMap::getChunkShared(ChunkCoord coord) const {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    auto it = m_chunks.find(coord);
-    return (it != m_chunks.end()) ? it->second : nullptr;
+    return m_store.getShared(coord);
 }
 
 std::string ChunkedTileMap::getTileInfo(int x, int y) const {
-    if (x < 0 || x >= m_totalWidth || y < 0 || y >= m_totalHeight) return "";
+    if (!m_grid.inBounds(x, y)) return "";
     int state = getTileState(x, y);
     std::ostringstream oss;
     oss << "Cell(" << x << "," << y << ") State=" << state;
@@ -43,45 +41,81 @@ std::string ChunkedTileMap::getTileInfo(int x, int y) const {
 
 std::shared_ptr<Chunk> ChunkedTileMap::createChunk(const ChunkCoord& coord,
     const glm::ivec2& worldOffset, int chunkSize, ChunkedTileMap* map) {
-    return std::make_shared<Chunk>(coord, worldOffset, m_tileSize, this, chunkSize);
+    return std::make_shared<Chunk>(coord, worldOffset, m_grid.tileSize(), this, chunkSize);
 }
 
 void ChunkedTileMap::setTile(int x, int y, int state) {
-    if (x < 0 || x >= m_totalWidth || y < 0 || y >= m_totalHeight) return;
-    int cx = x / m_chunkSize, cy = y / m_chunkSize;
-    int lx = x % m_chunkSize, ly = y % m_chunkSize;
-    ChunkCoord coord(cx, cy);
+    if (!m_grid.inBounds(x, y)) return;
+    CellLocation loc = m_grid.locate(x, y);
 
     Chunk* chunk = nullptr;
     {
-        std::shared_lock<std::shared_mutex> lock(m_mutex);
-        chunk = getOrCreateChunk(coord);
+        std::shared_lock<std::shared_mutex> lock(m_store.mutex());
+        chunk = getOrCreateChunk(loc.coord);
     }
     std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
-    int idx = ly * chunk->chunkSize + lx;
-    chunk->simBuffer[idx] = static_cast<uint8_t>(state);
+    chunk->simBuffer[loc.index(chunk->chunkSize)] = static_cast<uint8_t>(state);
     chunk->dirty = true;
     if (!chunk->active) {
         chunk->active = true;
-        addToActiveIfMissing(coord);
+        m_store.addActiveIfMissing(loc.coord);
     }
 }
 
 void ChunkedTileMap::setTileDirect(int x, int y, uint8_t state) {
-    if (x < 0 || x >= m_totalWidth || y < 0 || y >= m_totalHeight) return;
-    int cx = x / m_chunkSize, cy = y / m_chunkSize;
-    int lx = x % m_chunkSize, ly = y % m_chunkSize;
-    ChunkCoord coord(cx, cy);
+    if (!m_grid.inBounds(x, y)) return;
+    CellLocation loc = m_grid.locate(x, y);
 
     Chunk* chunk = nullptr;
     {
-        std::shared_lock<std::shared_mutex> lock(m_mutex);
-        chunk = getOrCreateChunk(coord);
+        std::shared_lock<std::shared_mutex> lock(m_store.mutex());
+        chunk = getOrCreateChunk(loc.coord);
     }
     std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
-    int idx = ly * chunk->chunkSize + lx;
-    chunk->renderBuffer[idx] = state;
+    chunk->renderBuffer[loc.index(chunk->chunkSize)] = state;
     chunk->dirty = true;
+}
+
+void ChunkedTileMap::ensureActiveChunks(const std::vector<ChunkCoord>& coords) {
+    const int cs = m_grid.chunkSize();
+    std::unique_lock<std::shared_mutex> lock(m_store.mutex());
+    for (const ChunkCoord& coord : coords) {
+        // Не выходим за границы мира.
+        int ox = coord.x() * cs, oy = coord.y() * cs;
+        if (ox < 0 || oy < 0 || ox >= m_grid.width() || oy >= m_grid.height())
+            continue;
+        Chunk* c = getOrCreateChunk(coord);
+        if (!c->active) {
+            c->active = true;
+            m_store.addActiveIfMissing(coord);
+        }
+    }
+}
+
+void ChunkedTileMap::paintBrush(int tileX, int tileY, int size, uint8_t state) {
+    int half = size / 2;
+    for (int dy = -half; dy <= half; ++dy)
+        for (int dx = -half; dx <= half; ++dx)
+            paintTile(tileX + dx, tileY + dy, state);
+}
+
+void ChunkedTileMap::paintTile(int x, int y, uint8_t state) {
+    if (!m_grid.inBounds(x, y)) return;
+    CellLocation loc = m_grid.locate(x, y);
+
+    Chunk* chunk = nullptr;
+    {
+        std::shared_lock<std::shared_mutex> lock(m_store.mutex());
+        chunk = getOrCreateChunk(loc.coord);
+    }
+    std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
+    chunk->renderBuffer[loc.index(chunk->chunkSize)] = state;
+    chunk->recalcLiveCells();   // держим liveCells в согласии с renderBuffer
+    chunk->dirty = true;
+    if (!chunk->active) {
+        chunk->active = true;
+        m_store.addActiveIfMissing(loc.coord);
+    }
 }
 
 void ChunkedTileMap::applyDefaultPalette() {
@@ -115,137 +149,33 @@ void ChunkedTileMap::applyDefaultPalette() {
 }
 
 int ChunkedTileMap::getTileState(int x, int y) const {
-    if (x < 0 || x >= m_totalWidth || y < 0 || y >= m_totalHeight) return 0;
-    int cx = x / m_chunkSize, cy = y / m_chunkSize;
-    int lx = x % m_chunkSize, ly = y % m_chunkSize;
-    ChunkCoord coord(cx, cy);
-    auto it = m_chunks.find(coord);
-    if (it == m_chunks.end()) return 0;
+    if (!m_grid.inBounds(x, y)) return 0;
+    CellLocation loc = m_grid.locate(x, y);
+    auto it = m_store.map().find(loc.coord);
+    if (it == m_store.map().end()) return 0;
     const auto& chunk = *it->second;
-    int idx = ly * chunk.chunkSize + lx;
-    return static_cast<int>(chunk.renderBuffer[idx]);
+    return static_cast<int>(chunk.renderBuffer[loc.index(chunk.chunkSize)]);
 }
 
 int ChunkedTileMap::getSimTileState(int x, int y) const {
-    if (x < 0 || x >= m_totalWidth || y < 0 || y >= m_totalHeight) return 0;
-    int cx = x / m_chunkSize, cy = y / m_chunkSize;
-    int lx = x % m_chunkSize, ly = y % m_chunkSize;
-    ChunkCoord coord(cx, cy);
-    auto it = m_chunks.find(coord);
-    if (it == m_chunks.end()) return 0;
+    if (!m_grid.inBounds(x, y)) return 0;
+    CellLocation loc = m_grid.locate(x, y);
+    auto it = m_store.map().find(loc.coord);
+    if (it == m_store.map().end()) return 0;
     const auto& chunk = *it->second;
-    int idx = ly * chunk.chunkSize + lx;
-    return static_cast<int>(chunk.simBuffer[idx]);
+    return static_cast<int>(chunk.simBuffer[loc.index(chunk.chunkSize)]);
 }
 
 void ChunkedTileMap::render(const Camera2D& camera) {
-    glm::vec2 viewMin, viewMax;
-    camera.getVisibleAABB(viewMin, viewMax);
-    float margin = m_chunkSize * m_tileSize * 2.0f;
-    viewMin -= glm::vec2(margin, margin);
-    viewMax += glm::vec2(margin, margin);
-    AABB viewBounds{ viewMin, viewMax };
-
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    for (auto& [coord, chunk] : m_chunks) {
-        if (!chunk || !chunk->renderer) continue;
-        if (!chunk->bounds.overlaps(viewBounds)) continue;
-
-        if (chunk->dirty.load(std::memory_order_acquire)) {
-            std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
-            chunk->updateRenderData();
-        }
-        chunk->renderer->render(camera, chunk->worldOffset, m_tileSize);
-    }
+    m_renderer.render(camera);
 }
 
 void ChunkedTileMap::setPalette(const std::vector<glm::vec3>& palette) {
-    ChunkRenderer::setGlobalPalette(palette);
-}
-
-void ChunkedTileMap::enqueueReadyChunk(std::shared_ptr<Chunk> chunk, uint64_t generation) {
-    std::lock_guard<std::mutex> lock(m_readyMutex);
-    m_readyChunks.emplace(std::move(chunk), generation);
+    ChunkMapRenderer::setPalette(palette);
 }
 
 void ChunkedTileMap::commitReadyChunks(const Camera2D& camera) {
-    std::vector<std::pair<std::shared_ptr<Chunk>, uint64_t>> readyList;
-    {
-        std::lock_guard<std::mutex> lock(m_readyMutex);
-        while (!m_readyChunks.empty()) {
-            readyList.push_back(std::move(m_readyChunks.front()));
-            m_readyChunks.pop();
-        }
-    }
-    readyList.insert(readyList.end(),
-        std::make_move_iterator(m_pendingReady.begin()),
-        std::make_move_iterator(m_pendingReady.end()));
-    m_pendingReady.clear();
-
-    if (readyList.empty()) return;
-
-    std::unordered_map<uint64_t, std::vector<std::shared_ptr<Chunk>>> groups;
-    for (auto& [chunk, gen] : readyList) {
-        groups[gen].push_back(std::move(chunk));
-    }
-
-    glm::vec2 viewMin, viewMax;
-    camera.getVisibleAABB(viewMin, viewMax);
-    float margin = m_chunkSize * m_tileSize * 2.0f;
-    viewMin -= glm::vec2(margin, margin);
-    viewMax += glm::vec2(margin, margin);
-    AABB viewBounds{ viewMin, viewMax };
-
-    std::vector<ChunkCoord> emptyCoords;
-
-    for (auto& [gen, chunks] : groups) {
-        int expected = 0;
-        bool known = false;
-        {
-            std::lock_guard<std::mutex> lock(m_genMutex);
-            auto it = m_generationExpectedCount.find(gen);
-            if (it != m_generationExpectedCount.end()) {
-                known = true;
-                expected = it->second;
-            }
-        }
-
-        if (known && static_cast<int>(chunks.size()) < expected) {
-            for (auto& c : chunks) {
-                m_pendingReady.emplace_back(std::move(c), gen);
-            }
-            continue;
-        }
-
-        for (auto& c : chunks) {
-            bool visible = c->bounds.overlaps(viewBounds);
-            {
-                std::lock_guard<std::mutex> lock(c->chunkMutex);
-                std::swap(c->simBuffer, c->renderBuffer);
-                if (visible) {
-                    c->recalcLiveCells();
-                    c->updateRenderData();
-                    if (c->liveCells.load(std::memory_order_acquire) == 0)
-                        emptyCoords.push_back(ChunkCoord(c->worldOffset.x / m_chunkSize, c->worldOffset.y / m_chunkSize));
-                }
-                else {
-                    c->dirty.store(true, std::memory_order_release);
-                }
-            }
-        }
-
-        if (known) {
-            std::lock_guard<std::mutex> lock(m_genMutex);
-            m_generationExpectedCount.erase(gen);
-        }
-    }
-
-    for (auto& coord : emptyCoords) {
-        std::unique_lock<std::shared_mutex> lock(m_mutex);
-        auto it = std::find(m_activeChunks.begin(), m_activeChunks.end(), coord);
-        if (it != m_activeChunks.end()) m_activeChunks.erase(it);
-        m_chunks.erase(coord);
-    }
+    m_sim.commitReady(camera);
 }
 
 void ChunkedTileMap::stampPattern(const RlePattern& pattern, int worldX, int worldY) {
@@ -260,62 +190,16 @@ void ChunkedTileMap::stampPattern(const RlePattern& pattern, int worldX, int wor
 }
 
 void ChunkedTileMap::simulateActiveChunks() {
-    bool expected = false;
-    if (!m_simulating.compare_exchange_strong(expected, true)) {
-        return;
-    }
+    m_sim.simulateActive();
+}
 
-    auto activeCopy = std::make_shared<std::vector<std::shared_ptr<Chunk>>>();
-    {
-        std::shared_lock<std::shared_mutex> lock(m_mutex);
-        activeCopy->reserve(m_activeChunks.size());
-        for (const auto& coord : m_activeChunks) {
-            auto it = m_chunks.find(coord);
-            if (it != m_chunks.end()) {
-                activeCopy->push_back(it->second);
-            }
-        }
-    }
-
-    if (activeCopy->empty()) {
-        m_simulating.store(false, std::memory_order_release);
-        return;
-    }
-
-    uint64_t gen;
-    {
-        std::lock_guard<std::mutex> lock(m_genMutex);
-        gen = ++m_currentGeneration;
-        m_generationExpectedCount[gen] = static_cast<int>(activeCopy->size());
-    }
-
-    size_t total = activeCopy->size();
-    size_t nw = std::max<size_t>(1, TaskScheduler::instance().thread_count());
-    size_t batch = std::max<size_t>(1, std::min<size_t>(256, total / nw));
-
-    auto tasksRemaining = std::make_shared<std::atomic<int>>(
-        static_cast<int>((total + batch - 1) / batch));
-
-    for (size_t i = 0; i < total; i += batch) {
-        size_t end = std::min(i + batch, total);
-        TaskScheduler::instance().schedule([this, activeCopy, i, end, gen, tasksRemaining]() {
-            for (size_t j = i; j < end; ++j) {
-                auto& chunk = (*activeCopy)[j];
-                if (chunk) {
-                    simulateChunk(*chunk);
-                    enqueueReadyChunk(chunk, gen);
-                }
-            }
-            if (tasksRemaining->fetch_sub(1) == 1) {
-                m_simulating.store(false, std::memory_order_release);
-            }
-            });
-    }
+void ChunkedTileMap::simulateAndWait() {
+    m_sim.simulateAndWait();
 }
 
 void ChunkedTileMap::commitOverlayRender() {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    for (auto& [coord, chunk] : m_chunks) {
+    std::shared_lock<std::shared_mutex> lock(m_store.mutex());
+    for (auto& [coord, chunk] : m_store.map()) {
         if (chunk->dirty.load(std::memory_order_acquire)) {
             std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
             chunk->updateRenderData();
@@ -324,17 +208,33 @@ void ChunkedTileMap::commitOverlayRender() {
 }
 
 void ChunkedTileMap::restoreAllRenderBuffers() {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    for (auto& [coord, chunk] : m_chunks) {
+    std::shared_lock<std::shared_mutex> lock(m_store.mutex());
+    for (auto& [coord, chunk] : m_store.map()) {
         std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
         chunk->commitChanges();
         chunk->updateRenderData();
     }
 }
 
+void ChunkedTileMap::clearAll() {
+    // Сначала погасить асинхронный пайплайн: иначе уже просчитанные чанки из
+    // очереди закоммитятся после очистки и вернут старое поле.
+    m_sim.reset();
+    std::unique_lock<std::shared_mutex> lock(m_store.mutex());
+    for (auto& [coord, chunk] : m_store.map()) {
+        std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
+        std::fill(chunk->simBuffer.begin(), chunk->simBuffer.end(), uint8_t{0});
+        std::fill(chunk->renderBuffer.begin(), chunk->renderBuffer.end(), uint8_t{0});
+        chunk->liveCells.store(0, std::memory_order_release);
+        chunk->active = false;
+        chunk->dirty.store(true, std::memory_order_release);  // рендер обновит GL
+    }
+    m_store.active().clear();
+}
+
 void ChunkedTileMap::clearAllRenderTiles(uint8_t value) {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    for (auto& [coord, chunk] : m_chunks) {
+    std::shared_lock<std::shared_mutex> lock(m_store.mutex());
+    for (auto& [coord, chunk] : m_store.map()) {
         std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
         auto& buf = chunk->renderBuffer;
         for (auto& v : buf) v = value;
@@ -344,30 +244,33 @@ void ChunkedTileMap::clearAllRenderTiles(uint8_t value) {
 }
 
 std::vector<ChunkCoord> ChunkedTileMap::snapshotActiveChunks() const {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    return m_activeChunks;
+    std::shared_lock<std::shared_mutex> lock(m_store.mutex());
+    return m_store.active();
 }
 
 void ChunkedTileMap::commitInitialState() {
-    std::shared_lock<std::shared_mutex> lock(m_mutex);
-    for (auto& [coord, chunk] : m_chunks) {
+    std::shared_lock<std::shared_mutex> lock(m_store.mutex());
+    for (auto& [coord, chunk] : m_store.map()) {
+        std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
+        // commitChanges() ставит dirty=true; саму загрузку в GL делает рендер-поток
+        // (он владеет контекстом). Вызывать updateRenderData() здесь нельзя — этот
+        // метод дёргается и из update-потока (randomize/load scene), где GL-контекста нет.
         chunk->commitChanges();
-        chunk->updateRenderData();
     }
 }
 
 std::vector<ChunkCoord> ChunkedTileMap::updateActiveStatus(const std::vector<ChunkCoord>& coords) {
     std::vector<ChunkCoord> becameEmpty;
     for (const auto& coord : coords) {
-        auto it = m_chunks.find(coord);
-        if (it == m_chunks.end()) continue;
+        auto it = m_store.map().find(coord);
+        if (it == m_store.map().end()) continue;
         Chunk& chunk = *it->second;
         bool nowActive = isChunkActive(chunk);
         if (nowActive != chunk.active) {
             chunk.active = nowActive;
-            if (nowActive) addToActiveIfMissing(coord);
+            if (nowActive) m_store.addActiveIfMissing(coord);
             else {
-                removeFromActive(coord);
+                m_store.removeActive(coord);
                 becameEmpty.push_back(coord);
             }
         }
@@ -381,27 +284,17 @@ bool ChunkedTileMap::isChunkActive(const Chunk& chunk) const {
     return false;
 }
 
-void ChunkedTileMap::addToActiveIfMissing(const ChunkCoord& coord) {
-    auto it = std::find(m_activeChunks.begin(), m_activeChunks.end(), coord);
-    if (it == m_activeChunks.end()) m_activeChunks.push_back(coord);
-}
-
-void ChunkedTileMap::removeFromActive(const ChunkCoord& coord) {
-    auto it = std::find(m_activeChunks.begin(), m_activeChunks.end(), coord);
-    if (it != m_activeChunks.end()) m_activeChunks.erase(it);
-}
-
 void ChunkedTileMap::removeEmptyChunks(const std::vector<ChunkCoord>& coords) {
     for (const auto& coord : coords) {
-        auto it = m_chunks.find(coord);
-        if (it != m_chunks.end() && isChunkActive(*it->second) == false) {
-            m_chunks.erase(it);
+        auto it = m_store.map().find(coord);
+        if (it != m_store.map().end() && isChunkActive(*it->second) == false) {
+            m_store.map().erase(it);
         }
     }
 }
 
 ChunkCoord ChunkedTileMap::getChunkCoord(const glm::ivec2& worldOffset) const {
-    return ChunkCoord(worldOffset.x / m_chunkSize, worldOffset.y / m_chunkSize);
+    return m_grid.chunkOfWorldOffset(worldOffset);
 }
 
 std::vector<uint8_t> ChunkedTileMap::getExtendedNeighborhood(const Chunk& chunk, int border) const {

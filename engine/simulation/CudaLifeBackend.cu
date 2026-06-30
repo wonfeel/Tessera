@@ -148,6 +148,15 @@ void CudaLifeBackend::simulateDirect(const uint8_t* ext, int extW,
 
     std::lock_guard<std::mutex> lock(m_mutex);
 
+    // Повторная проверка под локом: пока этот поток ждал мьютекса, другой
+    // поток мог уже установить m_interopFailed = true.
+    if (m_interopFailed) {
+        if (runKernel(ext, extW, S, rule))
+            cudaOk(cudaMemcpy(out, m_dOut, static_cast<size_t>(S) * S,
+                              cudaMemcpyDeviceToHost), "cudaMemcpy(D2H out)");
+        return;
+    }
+
     // Ленивая регистрация GL буфера. Если VBO сменился — перерегистрируем.
     if (m_registeredVBO != glVBO) {
         if (m_glResource)
@@ -156,18 +165,10 @@ void CudaLifeBackend::simulateDirect(const uint8_t* ext, int extW,
         m_glResource    = nullptr;
         m_registeredVBO = 0;
 
-        // На Windows WDDM нужно выбрать CUDA-устройство, соответствующее
-        // текущему GL-контексту. Делаем это здесь — GL-контекст уже создан.
-        {
-            unsigned int glDevCount = 0;
-            int          glDev      = 0;
-            if (cudaGLGetDevices(&glDevCount, &glDev, 1,
-                                 cudaGLDeviceListCurrentFrame) == cudaSuccess
-                && glDevCount > 0) {
-                cudaSetDevice(glDev);
-            }
-        }
-
+        // Не вызываем cudaSetDevice здесь: на WDDM с рабочими потоками он сбрасывает
+        // контекст текущего потока, после чего ранее аллоцированные m_dExt/m_dOut
+        // становятся невалидными и последующий runKernel падает с "OS call failed".
+        // На однопроцессорной системе (RTX 3060 Ti) device 0 всегда единственный.
         cudaGraphicsResource_t res = nullptr;
         cudaError_t regErr = cudaGraphicsGLRegisterBuffer(
             &res, glVBO, cudaGraphicsRegisterFlagsWriteDiscard);
@@ -180,6 +181,10 @@ void CudaLifeBackend::simulateDirect(const uint8_t* ext, int extW,
             std::fprintf(stderr,
                 "[CudaLifeBackend] GL interop unavailable (%s) — using CPU→GPU path\n",
                 cudaGetErrorString(regErr));
+            // Провальный вызов cudaGraphicsGLRegisterBuffer оставляет "sticky error"
+            // в контексте CUDA: все последующие вызовы тоже вернут ту же ошибку,
+            // пока мы не сбросим её через cudaGetLastError().
+            cudaGetLastError();
             m_interopFailed = true;
             // ВНИМАНИЕ: мы держим m_mutex, поэтому НЕ вызываем simulate()
             // (она лочит тот же нерекурсивный мьютекс → дедлок). Делаем kernel

@@ -20,4 +20,8 @@ public:
 
     // Распарсить из строки (весь файл целиком). Удобно для тестов.
     static RlePattern parse(const std::string& src);
+
+    // Список путей к *.rle в каталоге (отсортирован по имени). Пусто, если каталога
+    // нет. Удобно для UI выбора паттерна.
+    static std::vector<std::string> listFiles(const std::string& dir);
 };

@@ -39,7 +39,7 @@ double benchBackend(ISimulationBackend& backend,
 
 int main(int argc, char** argv) {
     const int S = (argc > 1) ? std::atoi(argv[1]) : 1024;   // сторона чанка
-    const int iterations = (argc > 2) ? std::atoi(argv[2]) : 200;
+    const int iterations = (argc > 2) ? std::atoi(argv[2]) : 100;
     const int extW = S + 2;
 
     std::printf("FieldEngine simulation benchmark\n");

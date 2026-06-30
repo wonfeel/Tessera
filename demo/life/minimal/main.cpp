@@ -1,7 +1,7 @@
 #include "engine/core/DefaultApplication.h"
 #include "engine/core/TaskScheduler.h"
 #include "engine/utils/RleLoader.h"
-#include "demo/minimallife_demo/MiniLifeTileMap.h"
+#include "demo/life/minimal/MiniLifeTileMap.h"
 #include <memory>
 #include <chrono>
 #include <cstdio>
@@ -10,7 +10,7 @@ int main() {
     TaskScheduler::instance().initialize();
 
     auto factory = []() -> std::unique_ptr<ChunkedTileMap> {
-        auto map = std::make_unique<MiniLifeTileMap>(0x400, 0x400, 18.0f, 256);
+        auto map = std::make_unique<MiniLifeTileMap>(0x4000, 0x4000, 18.0f, 64);
 
         // Загружаем пушку Госпера из файла.
         // Если файл не найден — fallback на случайный шум.

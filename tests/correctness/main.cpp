@@ -13,6 +13,7 @@
 #include "engine/simulation/CpuLifeBackend.h"
 #include "engine/simulation/SimulationBackendFactory.h"
 #include "engine/simulation/LifeRule.h"
+#include "engine/utils/RleLoader.h"
 
 #include <cstdio>
 #include <cstdint>
@@ -210,6 +211,61 @@ static bool testCpuVsGpu(ISimulationBackend& cpu, ISimulationBackend& gpu,
 }
 
 // ---------------------------------------------------------------------------
+// RLE parser tests (pure string parsing, no GL needed)
+// ---------------------------------------------------------------------------
+
+static bool rleEq(const RlePattern& p, int w, int h, const char* art) {
+    if (p.width != w || p.height != h) {
+        std::printf("    size %dx%d, expected %dx%d\n", p.width, p.height, w, h);
+        return false;
+    }
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            bool want = art[y * w + x] == '#';
+            bool got  = p.cells[y * w + x] != 0;
+            if (want != got) {
+                std::printf("    mismatch at (%d,%d): got %d want %d\n", x, y, got, want);
+                return false;
+            }
+        }
+    return true;
+}
+
+static bool testRleParser() {
+    bool ok = true;
+
+    // R-pentomino: .## / ##. / .#.
+    {
+        RlePattern p = RleLoader::parse("x = 3, y = 3, rule = B3/S23\nb2o$2ob$bo!\n");
+        bool t = rleEq(p, 3, 3, ".####..#.");
+        std::printf("  [%s] R-pentomino parse\n", t ? "PASS" : "FAIL");
+        ok &= t;
+    }
+    // Run-length + blank-row skip: 3o$3b3o!  -> ###... / ...### (2 rows? no)
+    {
+        RlePattern p = RleLoader::parse("x = 3, y = 2\n3o$3o!\n");
+        bool t = rleEq(p, 3, 2, "######");
+        std::printf("  [%s] run-length rows\n", t ? "PASS" : "FAIL");
+        ok &= t;
+    }
+    // Robustness: whitespace between count and tag must NOT drop the count.
+    {
+        RlePattern p = RleLoader::parse("x = 3, y = 1\n3 o!\n");
+        bool t = rleEq(p, 3, 1, "###");
+        std::printf("  [%s] whitespace between count and tag\n", t ? "PASS" : "FAIL");
+        ok &= t;
+    }
+    // Multi-row jump with $ count: o2$o!  -> #.. / ... / #..
+    {
+        RlePattern p = RleLoader::parse("x = 1, y = 3\no2$o!\n");
+        bool t = rleEq(p, 1, 3, "# #");  // (#, blank, #)
+        std::printf("  [%s] $N multi-row jump\n", t ? "PASS" : "FAIL");
+        ok &= t;
+    }
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
 // main
 // ---------------------------------------------------------------------------
 
@@ -241,6 +297,9 @@ int main() {
     } else {
         std::printf("\n(CUDA backend not available — skipping GPU tests)\n");
     }
+
+    std::printf("\n=== RLE parser ===\n");
+    allPass &= testRleParser();
 
     std::printf("\n%s\n", allPass ? "ALL TESTS PASSED" : "*** SOME TESTS FAILED ***");
     return allPass ? 0 : 1;

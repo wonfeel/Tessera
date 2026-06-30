@@ -144,46 +144,58 @@ if(FE_CUDA_ENABLED)
     set_target_properties(EngineLib PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 endif()
 
-# ===== Автоматическое обнаружение демок =====
-file(GLOB DEMO_DIRS LIST_DIRECTORIES true RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/demo" "${CMAKE_CURRENT_SOURCE_DIR}/demo/*")
-foreach(DEMO_DIR ${DEMO_DIRS})
-    if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/demo/${DEMO_DIR}")
-        set(DEMO_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/demo/${DEMO_DIR}/main.cpp")
-        if(EXISTS "${DEMO_MAIN}")
-            # Собираем ВСЕ .cpp/.c из папки демки (включая вложенные)
-            file(GLOB_RECURSE DEMO_EXTRA_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/demo/${DEMO_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/demo/${DEMO_DIR}/*.c")
-            # Убираем main.cpp из списка, чтобы не дублировать
-            list(REMOVE_ITEM DEMO_EXTRA_SOURCES "${DEMO_MAIN}")
+# ===== Копирование ассетов (один раз, чтобы цели не гонялись за одну папку) =====
+# Раньше каждый exe копировал Shaders/patterns в общий build-каталог в своём
+# POST_BUILD — при параллельной сборке шаги гонялись и иногда падали. Теперь одна
+# цель copy_assets делает это один раз, а приложения от неё зависят.
+add_custom_target(copy_assets ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/Shaders" "${CMAKE_BINARY_DIR}/Shaders"
+    COMMENT "Copying shaders"
+)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patterns")
+    add_custom_command(TARGET copy_assets POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/patterns" "${CMAKE_BINARY_DIR}/patterns"
+        COMMENT "Copying patterns"
+    )
+endif()
 
-            set(DEMO_NAME "Demo_${DEMO_DIR}")
-            add_executable(${DEMO_NAME} "${DEMO_MAIN}" ${DEMO_EXTRA_SOURCES})
-            target_link_libraries(${DEMO_NAME} PRIVATE EngineLib)
-            target_include_directories(${DEMO_NAME} PRIVATE
-                ${CMAKE_CURRENT_SOURCE_DIR}
-                ${GLFW_INCLUDE_DIR}
-                ${GLAD_INCLUDE_DIR}
-                ${GLM_INCLUDE_DIR}
-            )
-            if(IMGUI_AVAILABLE)
-                target_include_directories(${DEMO_NAME} PRIVATE ${IMGUI_DIR})
-            endif()
-            # Копирование шейдеров
-            add_custom_command(TARGET ${DEMO_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CMAKE_CURRENT_SOURCE_DIR}/Shaders"
-                "$<TARGET_FILE_DIR:${DEMO_NAME}>/Shaders"
-                COMMENT "Copying shaders for ${DEMO_NAME}"
-            )
-            # Копирование паттернов RLE
-            if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patterns")
-                add_custom_command(TARGET ${DEMO_NAME} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${CMAKE_CURRENT_SOURCE_DIR}/patterns"
-                    "$<TARGET_FILE_DIR:${DEMO_NAME}>/patterns"
-                    COMMENT "Copying patterns for ${DEMO_NAME}"
-                )
-            endif()
-            message(STATUS "Added demo: ${DEMO_NAME} (+ ${DEMO_EXTRA_SOURCES})")
-        endif()
+# Собрать одно приложение из main.cpp (+ соседние .cpp/.c в той же папке).
+function(fe_add_app MAIN_CPP TARGET_NAME)
+    get_filename_component(APP_DIR "${MAIN_CPP}" DIRECTORY)
+    file(GLOB_RECURSE APP_EXTRA "${APP_DIR}/*.cpp" "${APP_DIR}/*.c")
+    list(REMOVE_ITEM APP_EXTRA "${MAIN_CPP}")
+    add_executable(${TARGET_NAME} "${MAIN_CPP}" ${APP_EXTRA})
+    add_dependencies(${TARGET_NAME} copy_assets)
+    target_link_libraries(${TARGET_NAME} PRIVATE EngineLib)
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${GLFW_INCLUDE_DIR}
+        ${GLAD_INCLUDE_DIR}
+        ${GLM_INCLUDE_DIR}
+    )
+    if(IMGUI_AVAILABLE)
+        target_include_directories(${TARGET_NAME} PRIVATE ${IMGUI_DIR})
     endif()
-endforeach()
+    message(STATUS "Added ${TARGET_NAME} (${MAIN_CPP})")
+endfunction()
+
+# Обойти дерево, собрать приложения из каждого main.cpp. Имя цели — из пути
+# относительно базовой папки: demo/life/full -> Demo_life_full, tests/capture -> Test_capture.
+function(fe_discover_apps BASE_DIR PREFIX)
+    file(GLOB_RECURSE MAINS "${BASE_DIR}/*.cpp")
+    foreach(MAIN ${MAINS})
+        get_filename_component(FN "${MAIN}" NAME)
+        if(FN STREQUAL "main.cpp")
+            get_filename_component(MDIR "${MAIN}" DIRECTORY)
+            file(RELATIVE_PATH REL "${BASE_DIR}" "${MDIR}")
+            string(REPLACE "/" "_" NAME "${REL}")
+            fe_add_app("${MAIN}" "${PREFIX}_${NAME}")
+        endif()
+    endforeach()
+endfunction()
+
+# ===== Демки (игры) и тесты/бенчмарки =====
+fe_discover_apps("${CMAKE_CURRENT_SOURCE_DIR}/demo"  "Demo")
+fe_discover_apps("${CMAKE_CURRENT_SOURCE_DIR}/tests" "Test")
