@@ -1,0 +1,30 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (CPU-only, no CUDA)
+        run: cmake --preset x64-release
+        working-directory: ${{ github.workspace }}
+
+      - name: Build tests
+        run: cmake --build out/build/x64-release --target Test_correctness Test_propagation
+        working-directory: ${{ github.workspace }}
+
+      - name: Run Test_correctness
+        run: out/build/x64-release/Test_correctness.exe
+        working-directory: ${{ github.workspace }}
+
+      - name: Run Test_propagation
+        run: out/build/x64-release/Test_propagation.exe
+        working-directory: ${{ github.workspace }}
