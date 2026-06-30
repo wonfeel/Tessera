@@ -110,7 +110,8 @@ def main():
                str(args.grid), str(args.grid),
                str(gx), str(gy),
                "-1", "-1", "0", "0",   # eaterX/Y/rot/shape (unused for non-guns)
-               str(scene_id)]
+               str(scene_id),
+               str(args.delay)]
         print("Running capture:", " ".join(cmd))
         res = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
         if res.stderr:
