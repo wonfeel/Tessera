@@ -79,6 +79,8 @@ def main():
     ap.add_argument("--colors", type=int, default=128, help="GIF palette size (2-256)")
     ap.add_argument("--guns", type=int, nargs=2, metavar=("GX", "GY"), default=[1, 1],
                     help="number of Gosper guns horizontally and vertically (default: 1 1)")
+    ap.add_argument("--scene", choices=["guns", "random", "glider"], default="guns",
+                    help="scene to render: guns (default), random 64x64 field, glider")
     ap.add_argument("--workdir", default=None,
                     help="working dir for the exe (defaults to the exe's folder)")
     args = ap.parse_args()
@@ -100,12 +102,15 @@ def main():
         # Test_capture arg order:
         #   outDir stopStep stride resW resH x0 y0 x1 y1 gridW gridH
         gx, gy = args.guns
+        scene_id = {"guns": 0, "random": 1, "glider": 2}[args.scene]
         cmd = [exe, tmp,
                str(args.stop), str(STRIDE),
                str(resW), str(resH),
                str(x0), str(y0), str(x1), str(y1),
                str(args.grid), str(args.grid),
-               str(gx), str(gy)]
+               str(gx), str(gy),
+               "-1", "-1", "0", "0",   # eaterX/Y/rot/shape (unused for non-guns)
+               str(scene_id)]
         print("Running capture:", " ".join(cmd))
         res = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
         if res.stderr:
