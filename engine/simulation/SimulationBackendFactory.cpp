@@ -14,12 +14,12 @@
 std::unique_ptr<ISimulationBackend> MakeSimulationBackend() {
 #ifdef FE_CUDA_ENABLED
     if (CudaLifeBackend::isAvailable()) {
-        std::fprintf(stderr, "[FieldEngine] Simulation backend: CUDA (GPU)\n");
+        std::fprintf(stderr, "[Tessera] Simulation backend: CUDA (GPU)\n");
         return std::make_unique<CudaLifeBackend>();
     }
-    std::fprintf(stderr, "[FieldEngine] CUDA compiled, but no GPU found -> CPU fallback\n");
+    std::fprintf(stderr, "[Tessera] CUDA compiled, but no GPU found -> CPU fallback\n");
 #else
-    std::fprintf(stderr, "[FieldEngine] Simulation backend: CPU (built without CUDA)\n");
+    std::fprintf(stderr, "[Tessera] Simulation backend: CPU (built without CUDA)\n");
 #endif
     return std::make_unique<CpuLifeBackend>();
 }

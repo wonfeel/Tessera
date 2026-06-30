@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Make a GIF of a FieldEngine simulation.
+Make a GIF of a Tessera simulation.
 
 Drives the Demo_capture_demo executable (which renders a fixed grid region into
 an offscreen window and dumps PPM frames), then assembles those frames into a GIF.
@@ -46,7 +46,7 @@ def parse_res(s):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Make a GIF of a FieldEngine simulation.")
+    ap = argparse.ArgumentParser(description="Make a GIF of a Tessera simulation.")
     ap.add_argument("--exe", required=True, help="path to Demo_capture_demo executable")
     ap.add_argument("--out", default="demo.gif", help="output GIF path")
     ap.add_argument("--stop", type=int, default=300, help="last simulation step to capture")

@@ -1,5 +1,5 @@
 ﻿cmake_minimum_required(VERSION 3.18)
-project(FieldEngine VERSION 1.0 LANGUAGES CXX C)
+project(Tessera VERSION 1.0 LANGUAGES CXX C)
 
 # ===== Настройки C++ =====
 set(CMAKE_CXX_STANDARD 17)
@@ -77,7 +77,7 @@ endforeach()
 
 if(IMGUI_AVAILABLE)
     message(STATUS "ImGui found – GUI support enabled")
-    add_compile_definitions(FLORA_IMGUI_ENABLED)
+    add_compile_definitions(TESSERA_IMGUI_ENABLED)
 else()
     message(WARNING "ImGui not found – building without GUI support")
     set(IMGUI_SOURCES "")

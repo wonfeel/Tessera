@@ -9,7 +9,7 @@
 #include <chrono>
 #include <atomic>
 
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
 #  include <imgui.h>
 #endif
 
@@ -20,7 +20,7 @@ public:
     DefaultApplication(TileMapFactory factory,
         std::chrono::milliseconds simInterval = std::chrono::milliseconds(0),
         int windowWidth = 1920, int windowHeight = 1080,
-        const std::string& title = "FieldEngine Demo",
+        const std::string& title = "Tessera Demo",
         bool showPerformance = false)
         : Application(windowWidth, windowHeight, title, showPerformance)
         , m_factory(std::move(factory))
@@ -84,13 +84,13 @@ protected:
 
     // ImGui panel — called by Application's render loop between NewFrame/Render.
     void onImGui() override {
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
         // Фиксированная высота + скролл: иначе при авто-высоте панель растёт за
         // нижний край экрана и нижние кнопки (в т.ч. запись GIF) не видно.
         // Окно можно перетаскивать и ресайзить, позиция/размер только по старту.
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(290, 600), ImGuiCond_FirstUseEver);
-        ImGui::Begin("FieldEngine", nullptr,
+        ImGui::Begin("Tessera", nullptr,
             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings);
 
         // --- Performance ---

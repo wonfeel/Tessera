@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
     const int iterations = (argc > 2) ? std::atoi(argv[2]) : 100;
     const int extW = S + 2;
 
-    std::printf("FieldEngine simulation benchmark\n");
+    std::printf("Tessera simulation benchmark\n");
     std::printf("  chunk: %dx%d (%lld cells), iterations: %d\n\n",
                 S, S, static_cast<long long>(S) * S, iterations);
 

@@ -1,6 +1,6 @@
 // demo/life_test/main.cpp
 //
-// Headless correctness test for FieldEngine simulation backends.
+// Headless correctness test for Tessera simulation backends.
 // Exit 0 = all tests passed. Exit 1 = at least one failure.
 //
 // Tests:
@@ -270,7 +270,7 @@ static bool testRleParser() {
 // ---------------------------------------------------------------------------
 
 int main() {
-    std::printf("FieldEngine simulation correctness tests\n\n");
+    std::printf("Tessera simulation correctness tests\n\n");
 
     const LifeRule rule = MakeConwayRule();
     CpuLifeBackend cpu;
