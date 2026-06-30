@@ -178,8 +178,11 @@ private:
         // test_capture positional args:
         //   outOrDir stop stride resW resH x0 y0 x1 y1 gridW gridH gunsX gunsY
         //   eaterX eaterY eaterRot eaterShape scene
+        // cmd /c "..." is needed because system() goes through cmd.exe on
+        // Windows, and multiple quoted args confuse its parser otherwise.
         std::ostringstream cmd;
-        cmd << '"' << captureExe << '"'
+        cmd << "cmd /c \""
+            << '"' << captureExe << '"'
             << " \"" << m_outPath << '"'
             << ' ' << m_stop << " 1"               // stride always 1
             << ' ' << m_resW << ' ' << m_resH
@@ -189,7 +192,8 @@ private:
             << ' ' << m_gunsX << ' ' << m_gunsY
             << " -1 -1 0 0"                        // eater (auto)
             << ' ' << m_scene
-            << ' ' << m_delayMs;
+            << ' ' << m_delayMs
+            << '"';
         runAsync(cmd.str(), m_running, m_exitCode);
     }
 
