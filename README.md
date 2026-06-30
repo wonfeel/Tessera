@@ -17,9 +17,9 @@ OpenGL — not just read about them.
 
 ![random field](assets/random_field.gif)
 
-**Single glider — moves diagonally, crosses a chunk boundary at step 16:**
+**Capture UI — ImGui interface for configuring and launching headless GIF exports:**
 
-![glider](assets/glider.gif)
+![capture ui](assets/interface.png)
 
 ---
 
