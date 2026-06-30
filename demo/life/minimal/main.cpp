@@ -10,7 +10,7 @@ int main() {
     TaskScheduler::instance().initialize();
 
     auto factory = []() -> std::unique_ptr<ChunkedTileMap> {
-        auto map = std::make_unique<MiniLifeTileMap>(0x4000, 0x4000, 18.0f, 64);
+        auto map = std::make_unique<MiniLifeTileMap>(0x400, 0x400, 18.0f, 64);
 
         // Загружаем пушку Госпера из файла.
         // Если файл не найден — fallback на случайный шум.

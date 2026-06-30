@@ -189,8 +189,8 @@ void ChunkedTileMap::stampPattern(const RlePattern& pattern, int worldX, int wor
     }
 }
 
-void ChunkedTileMap::simulateActiveChunks() {
-    m_sim.simulateActive();
+bool ChunkedTileMap::simulateActiveChunks() {
+    return m_sim.simulateActive();
 }
 
 void ChunkedTileMap::simulateAndWait() {

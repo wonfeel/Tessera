@@ -10,11 +10,11 @@ void SimulationCoordinator::enqueueReady(std::shared_ptr<Chunk> chunk, uint64_t 
     m_readyChunks.emplace(std::move(chunk), generation);
 }
 
-void SimulationCoordinator::simulateActive() {
+bool SimulationCoordinator::simulateActive() {
     // Стартуем новое поколение только если предыдущее полностью закоммичено (Idle).
     Phase expected = Phase::Idle;
     if (!m_phase.compare_exchange_strong(expected, Phase::Computing)) {
-        return;
+        return false;
     }
 
     auto activeCopy = std::make_shared<std::vector<std::shared_ptr<Chunk>>>();
@@ -31,7 +31,7 @@ void SimulationCoordinator::simulateActive() {
 
     if (activeCopy->empty()) {
         m_phase.store(Phase::Idle, std::memory_order_release);
-        return;
+        return false;
     }
 
     uint64_t gen;
@@ -64,6 +64,7 @@ void SimulationCoordinator::simulateActive() {
             }
             });
     }
+    return true;   // новое поколение реально стартовало
 }
 
 void SimulationCoordinator::simulateAndWait() {

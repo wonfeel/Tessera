@@ -52,8 +52,8 @@ protected:
         if (m_paused.load()) {
             // На паузе можно сделать ровно один шаг кнопкой "Step".
             if (m_stepRequested.exchange(false)) {
-                m_tileMap->simulateActiveChunks();
-                m_generation.fetch_add(1, std::memory_order_relaxed);
+                if (m_tileMap->simulateActiveChunks())
+                    m_generation.fetch_add(1, std::memory_order_relaxed);
             }
             return;
         }
@@ -61,9 +61,13 @@ protected:
         int ms = m_simSpeedMs.load();
         auto now = std::chrono::steady_clock::now();
         if (ms == 0 || now - m_lastSimTime >= std::chrono::milliseconds(ms)) {
-            m_tileMap->simulateActiveChunks();
+            // Считаем поколение только если шаг действительно стартовал: при
+            // ms==0 update-цикл крутится быстрее, чем шаги коммитятся, и пустые
+            // вызовы (барьер фаз ещё держит предыдущее поколение) не должны
+            // накручивать счётчик.
+            if (m_tileMap->simulateActiveChunks())
+                m_generation.fetch_add(1, std::memory_order_relaxed);
             m_lastSimTime = now;
-            m_generation.fetch_add(1, std::memory_order_relaxed);
         }
     }
 

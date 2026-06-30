@@ -2,7 +2,8 @@
 
 A small 2D engine that runs cellular automata (like Conway's Game of Life) on a
 chunked world and renders it with OpenGL. I built this to actually understand the
-stuff that doesn't click from books alone.
+stuff that doesn't click from books alone — threads, a thread pool, CUDA, and how
+to keep a big simulation from stuttering.
 
 ---
 
@@ -15,9 +16,8 @@ Before this I had:
 
 This is where I tried to fix the things that were wrong with that last one.
 
-The main questions I wanted to answer:
-- How do you separate simulation and rendering into different threads without
-  getting races?
+The questions I wanted to answer for myself:
+- How do you split simulation and rendering across threads without getting races?
 - How do you write a thread pool that actually works?
 - Does the GPU really make it faster, and by how much?
 
@@ -25,43 +25,73 @@ The main questions I wanted to answer:
 
 ## What it can do
 
-- The world is split into chunks — only live/visible ones are simulated
-- Simulation runs in parallel (custom thread pool), rendering in a separate
-  thread — the picture doesn't stutter when the simulation is heavy
-- The automaton rule is stored as a lookup table, not hardcoded — so the same
-  rule works on both CPU and CUDA without rewriting anything
-- CUDA backend uses shared memory tiling to reduce global memory reads
-- Tried to implement CUDA-GL interop (writing results directly into the GL
-  vertex buffer to skip the PCI-E round trip) — it falls back gracefully on
-  Windows WDDM where GL context threading gets in the way
-- Loads `.rle` pattern files — the standard format from conwaylife.com
+- The world is split into chunks — only live chunks are simulated, and life
+  spreads into neighbour chunks as it reaches their borders (gliders cross chunk
+  boundaries correctly).
+- Simulation runs in parallel on a custom thread pool; rendering runs on its own
+  thread — the picture doesn't stutter when the simulation is heavy.
+- The automaton rule is a lookup table, not hardcoded — the same rule runs on
+  CPU and CUDA without rewriting anything.
+- CUDA backend uses shared-memory tiling to cut global-memory reads.
+- Tried CUDA-GL interop (writing results straight into the GL vertex buffer to
+  skip the PCI-E round trip) — it falls back gracefully on Windows WDDM, where
+  the GL context lives on a different thread.
+- Loads `.rle` pattern files (the standard format from conwaylife.com) and you
+  can pick any of them from the in-app panel.
+- Interactive editing: draw/erase cells, pan, zoom, pause/step, change speed, and
+  record a region of the field straight to a GIF.
+
+---
+
+## How it's put together
+
+The two big classes used to do everything, so I split them into pieces that each
+do one job:
+
+- `ChunkStore` — owns the chunks, their lock, and the active-chunk list
+- `SimulationCoordinator` — runs one generation: schedules chunk work on the
+  thread pool, then commits the results. A small phase machine
+  (`Idle → Computing → ReadyToCommit → Committing`) makes sure computing and
+  committing never overlap, so neighbour reads always see one consistent
+  generation.
+- `ChunkMapRenderer` — draws the chunks that are on screen
+- `ChunkGrid` — world ↔ chunk-local coordinate math
+- `CameraController` — WASD / mouse-wheel / middle-drag camera
+- `ChunkedTileMap` — a thin layer that ties those together
+
+The simulation backend is behind an interface (`ISimulationBackend`), so CPU and
+CUDA are interchangeable and the rest of the engine doesn't know which one it got.
 
 ---
 
 ## Benchmark
 
-RTX 3060 Ti, chunk 1024×1024, 200 iterations, Release:
+Conway's rule, RTX 30-series, one chunk, 100 iterations. The GPU only pulls ahead
+once the field is big enough to hide the kernel-launch overhead:
 
-| Backend | Speed          |
-|---------|----------------|
-| CPU     | 281 Mcells/s   |
-| CUDA    | 1909 Mcells/s  |
-| Speedup | **6.8×**       |
+| Chunk size | CPU          | CUDA           | Speedup |
+|------------|--------------|----------------|---------|
+| 256²       | 37 Mcells/s  | 351 Mcells/s   | 9.5×    |
+| 512²       | 35 Mcells/s  | 1230 Mcells/s  | 35×     |
+| 1024²      | 37 Mcells/s  | 2366 Mcells/s  | 64×     |
+| 2048²      | 37 Mcells/s  | 4034 Mcells/s  | 109×    |
+
+Run it yourself: `Test_benchmark <chunkSize> <iterations>`.
 
 ---
 
 ## Build
 
-Windows, Visual Studio 2022, CMake + Ninja. GLFW/GLAD/GLM are in `libs/`,
-nothing to install separately.
+Windows, Visual Studio 2022, CMake + Ninja. GLFW / GLAD / GLM / ImGui are vendored
+in `libs/`, nothing to install separately.
 
 ```bash
 cmake --preset x64-release
 cmake --build out/build/x64-release
 ```
 
-CUDA is optional — without it the project builds CPU-only. CMake prints which
-one it picked:
+CUDA is optional — without it the project builds CPU-only. CMake prints which one
+it picked:
 ```
 -- CUDA found – GPU simulation backend enabled
 -- CUDA not found – building CPU-only simulation backend
@@ -72,32 +102,52 @@ one it picked:
 ## Demos
 
 ```
-Demo_minimallife_demo   150 Gosper Glider Guns loaded from RLE, runs on GPU
-Demo_fractal_demo       Mandelbrot set through the same chunk pipeline
-Demo_benchmark_demo     CPU vs GPU throughput, no window
-Demo_life_test          Correctness tests — exit 0 = all pass
+Demo_life_full      Full interactive Game of Life: draw, pan/zoom, pause/step,
+                    pick patterns, record GIFs (ImGui panel).
+Demo_life_minimal   The smallest possible setup — a randomized field, nothing else.
 ```
 
-The fractal demo exists mostly to prove the engine isn't hardwired to Game of
-Life — any chunk-based data source works.
+Controls (full demo):
+
+```
+LMB        draw cells           Space      pause / resume
+RMB        erase cells          Step >      one step while paused
+MMB drag   pan                  WASD        pan with the keyboard
+Scroll     zoom to cursor       slider      simulation speed
+```
+
+The left panel also has a pattern picker (any `patterns/*.rle`), Clear / Randomize,
+and a GIF recorder (select a region, hit record).
 
 ---
 
 ## Tests
 
-`Demo_life_test` is headless and checks:
+Headless, exit 0 = pass. They live under `tests/`:
+
+```
+Test_correctness   rule + RLE-parser tests
+Test_propagation   a glider must cross a chunk boundary intact
+Test_capture       deterministic GIF dump — used as a regression fingerprint
+Test_benchmark     CPU vs GPU throughput
+```
+
+`Test_correctness` checks:
 - block still-life doesn't change
 - blinker oscillates with period 2
 - glider moves to the correct position after 4 steps
 - CPU and CUDA produce byte-identical output after 100 steps on the same input
+- the `.rle` parser decodes run-lengths, row jumps and whitespace correctly
 
-All 9 pass on both backends.
+`Test_propagation` is the one I added after finding gliders were being clipped at
+chunk borders — it stamps a glider near a boundary and checks it comes out the
+other side with the right shape and offset.
 
 ---
 
 ## What's not done yet
 
-- No pan/zoom with the mouse — camera is fixed
-- No generation counter or FPS display
-- CUDA-GL interop currently falls back to the regular path on WDDM (the
-  simulation runs on worker threads where the GL context isn't current)
+- CUDA-GL interop still falls back to the regular copy path on WDDM (the
+  simulation runs on worker threads where the GL context isn't current).
+- Only 2-state, totalistic "life-like" rules so far (no multi-state automata).
+- The world is a fixed size, not truly infinite.

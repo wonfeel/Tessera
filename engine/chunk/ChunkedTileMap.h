@@ -44,7 +44,9 @@ public:
 
     void render(const Camera2D& camera);
     void commitReadyChunks(const Camera2D& camera);
-    virtual void simulateActiveChunks();
+    // Запускает один асинхронный шаг. Возвращает true, если поколение реально
+    // стартовало (предыдущее уже закоммичено и есть активные чанки).
+    virtual bool simulateActiveChunks();
 
     // Синхронный шаг: запускает симуляцию одного поколения и блокируется,
     // пока все задачи не завершатся. Удобно для детерминированного оффлайн-
