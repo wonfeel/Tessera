@@ -86,6 +86,7 @@ int main(int argc, char** argv) {
     const int eaterShape = argi(argc, argv, 17, 0);  // 0 = eater1 (крючок), 1 = блок 2x2
     // scene: 0 = guns (default), 1 = random 64x64, 2 = glider
     const int scene    = argi(argc, argv, 18, 0);
+    const int delayMs  = std::max(20, argi(argc, argv, 19, 50));
 
     if (x1 <= x0 || y1 <= y0) {
         std::fprintf(stderr, "[capture] invalid region: (%d,%d)-(%d,%d)\n",
@@ -206,7 +207,7 @@ int main(int argc, char** argv) {
             gp.scale   = std::max(1, resW / std::max(1, x1 - x0));
             gp.stride  = stride;
             gp.frames  = stopStep / stride + 1;
-            gp.delayMs = 50;
+            gp.delayMs = delayMs;
             gp.path    = out;
             bool ok = ExportGif(*map, gp, stepFn);
             std::fprintf(stderr, "[capture] ExportGif -> %s : %s\n",

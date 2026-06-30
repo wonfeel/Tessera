@@ -188,7 +188,8 @@ private:
             << " 512 512"                           // grid size
             << ' ' << m_gunsX << ' ' << m_gunsY
             << " -1 -1 0 0"                        // eater (auto)
-            << ' ' << m_scene;
+            << ' ' << m_scene
+            << ' ' << m_delayMs;
         runAsync(cmd.str(), m_running, m_exitCode);
     }
 
