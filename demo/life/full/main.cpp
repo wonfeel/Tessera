@@ -36,7 +36,7 @@ public:
     InteractiveApp()
         : DefaultApplication(
             []() -> std::unique_ptr<ChunkedTileMap> {
-                auto map = std::make_unique<LifeMap>(512, 512, 2.0f, 64);
+                auto map = std::make_unique<LifeMap>(0x200, 0x200, 2.0f, 64);
                 map->randomize(0.3f);
                 return map;
             },
