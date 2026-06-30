@@ -1,5 +1,13 @@
 # Tessera
 
+![C++](https://img.shields.io/badge/C%2B%2B-17-blue?style=flat)
+![CUDA](https://img.shields.io/badge/CUDA-optional-76b900?style=flat)
+![OpenGL](https://img.shields.io/badge/OpenGL-4.6-white?style=flat)
+![Platform](https://img.shields.io/badge/platform-Windows-0078d7?style=flat)
+![License](https://img.shields.io/badge/license-MIT-green?style=flat)
+
+**[Русский](README_RU.md)**
+
 A 2D cellular-automaton engine in C++/CUDA/OpenGL. The world is chunked — only live
 chunks are simulated, gliders cross chunk boundaries correctly, simulation and rendering
 run on separate threads. Built to actually understand threads, thread pools, CUDA, and
