@@ -22,8 +22,8 @@ MiniLifeTileMap::MiniLifeTileMap(int w, int h, float ts, int chunkSize)
 void MiniLifeTileMap::randomize(float density) {
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> dist(0.0f, 1.0f);
-    for (int y = 0; y < m_totalHeight; ++y)
-        for (int x = 0; x < m_totalWidth; ++x)
+    for (int y = 0; y < getHeight(); ++y)
+        for (int x = 0; x < getWidth(); ++x)
             if (dist(rng) < density)
                 setTile(x, y, 255);   // начальное состояние — 255 (белый в Grayscale, яркий в радуге)
     commitInitialState();

@@ -3,6 +3,23 @@
 #include <fstream>
 #include <sstream>
 #include <cctype>
+#include <algorithm>
+#include <filesystem>
+
+std::vector<std::string> RleLoader::listFiles(const std::string& dir) {
+    std::vector<std::string> out;
+    std::error_code ec;
+    if (!std::filesystem::is_directory(dir, ec)) return out;
+    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+        if (ec) break;
+        if (!entry.is_regular_file()) continue;
+        const auto& p = entry.path();
+        if (p.extension() == ".rle")
+            out.push_back(p.generic_string());
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
 
 RlePattern RleLoader::load(const std::string& path) {
     std::ifstream f(path);
@@ -82,6 +99,12 @@ RlePattern RleLoader::parse(const std::string& src) {
     for (char ch : body) {
         if (ch == '!') break;
 
+        // Пробельные символы пропускаем НЕ трогая накопленный счётчик: по спеку
+        // RLE пробелы/переводы строк допустимы где угодно, в т.ч. между числом и
+        // тегом ("10 o"). Раньше пробел сбрасывал runLen и счётчик терялся.
+        if (ch == '\r' || ch == '\n' || ch == ' ' || ch == '\t')
+            continue;
+
         if (std::isdigit(static_cast<unsigned char>(ch))) {
             runLen = runLen * 10 + (ch - '0');
             continue;
@@ -102,8 +125,6 @@ RlePattern RleLoader::parse(const std::string& src) {
         } else if (ch == '$') {
             cy += count;
             cx = 0;
-        } else if (ch == '\r' || ch == '\n' || ch == ' ') {
-            // пробельные символы внутри тела — игнорируем
         }
         // любые другие символы (многосостояние, 'A'..'X') — пропускаем
     }
