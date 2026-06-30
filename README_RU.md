@@ -1,5 +1,6 @@
 # Tessera
 
+![Build](https://github.com/wonfeel/Tessera/actions/workflows/build.yml/badge.svg)
 ![C++](https://img.shields.io/badge/C%2B%2B-17-blue?style=flat)
 ![CUDA](https://img.shields.io/badge/CUDA-optional-76b900?style=flat)
 ![OpenGL](https://img.shields.io/badge/OpenGL-4.6-white?style=flat)
