@@ -24,6 +24,10 @@ public:
     unsigned int getInstanceVBO() const { return instanceVBO; }
 
     static void setGlobalPalette(const std::vector<glm::vec3>& palette);
+    // CPU-копия активной палитры (value 0..255 -> RGB в диапазоне 0..1).
+    // Нужна тем, кто рисует пиксели на CPU (например, экспорт GIF из состояния
+    // клеток напрямую, без чтения GL-фреймбуфера).
+    static const std::vector<glm::vec3>& getGlobalPalette();
     static void shutdownStatics();
 
 private:
@@ -41,6 +45,7 @@ private:
     static std::unique_ptr<Shader> s_shader;
     static unsigned int s_paletteTexture;
     static bool s_staticInitialized;
+    static std::vector<glm::vec3> s_palette;   // CPU-копия палитры
 
     static GLint s_locCamera;
     static GLint s_locCellSize;

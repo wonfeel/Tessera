@@ -4,6 +4,10 @@
 #include <sstream>
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  include <windows.h>
+#endif
 
 Shader::Shader(const std::string& vertPath, const std::string& fragPath) {
     std::string vertCode = readFile(vertPath);
@@ -87,10 +91,27 @@ void Shader::checkCompileErrors(unsigned int shader, const std::string& type) {
 }
 
 std::string Shader::readFile(const std::string& path) {
+    // Try the path as-is first (works when CWD == exe directory).
     std::ifstream file(path);
     if (!file.is_open()) {
-        std::cerr << "Failed to open shader file: " << path << std::endl;
-        return "";
+        // Fallback: look for the file next to the executable.
+        // Useful when the IDE sets CWD to the project root instead of the
+        // build output folder where POST_BUILD copied the shaders.
+#ifdef _WIN32
+        char exePath[MAX_PATH] = {};
+        if (GetModuleFileNameA(nullptr, exePath, MAX_PATH)) {
+            std::string exeDir(exePath);
+            auto sep = exeDir.find_last_of("\\/");
+            if (sep != std::string::npos) {
+                std::string fallback = exeDir.substr(0, sep + 1) + path;
+                file.open(fallback);
+            }
+        }
+#endif
+        if (!file.is_open()) {
+            std::cerr << "Failed to open shader file: " << path << std::endl;
+            return "";
+        }
     }
     std::stringstream buffer;
     buffer << file.rdbuf();
