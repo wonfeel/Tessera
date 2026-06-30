@@ -9,7 +9,7 @@ OpenGL — not just read about them.
 
 ## Previews
 
-**Gosper gun + glider eater — a stable loop, period 30:**
+**Gosper gun period 30:**
 
 ![gun + eater](assets/gun_eater.gif)
 
