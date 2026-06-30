@@ -27,7 +27,7 @@
 #include <string>
 #include <vector>
 
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
 #  include <imgui.h>
 #endif
 
@@ -42,7 +42,7 @@ public:
             },
             std::chrono::milliseconds(0),
             1280, 720,
-            "FieldEngine — Interactive Life",
+            "Tessera — Interactive Life",
             false)
     {
         std::strcpy(m_recPath, "field.gif");
@@ -115,7 +115,7 @@ protected:
     }
 
     void onImGuiExtra() override {
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
         // --- Pattern picker ---
         ImGui::Spacing();
         ImGui::TextDisabled("Pattern");
@@ -199,7 +199,7 @@ protected:
     }
 
 private:
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
     // Draw the selected region as a rectangle over the field (screen space).
     void drawRegionOverlay() {
         if (!m_haveRegion.load() && !m_dragging) return;

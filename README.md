@@ -1,4 +1,4 @@
-# FieldEngine
+# Tessera
 
 A small 2D engine that runs cellular automata (like Conway's Game of Life) on a
 chunked world and renders it with OpenGL. I built this to actually understand the

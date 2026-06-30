@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14)
-project(FieldEngine VERSION 1.0 LANGUAGES CXX C)
+project(Tessera VERSION 1.0 LANGUAGES CXX C)
 
 # ===== Настройки C++ =====
 set(CMAKE_CXX_STANDARD 17)

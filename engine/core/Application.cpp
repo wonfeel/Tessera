@@ -4,7 +4,7 @@
 #include <ctime>
 #include <sstream>
 #include <iomanip>
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
 #  include <imgui.h>
 #  include <imgui_impl_glfw.h>
 #  include <imgui_impl_opengl3.h>
@@ -60,7 +60,7 @@ Application::~Application() {
 }
 
 // ImGui helpers — only compiled when ImGui is available.
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
 static void imguiInit(GLFWwindow* window) {
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -98,7 +98,7 @@ void Application::run() {
     // Render thread has released the GL context — reclaim it in the main thread.
     glfwMakeContextCurrent(m_window);
 
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
     if (m_imguiReady) {
         imguiShutdown();
         m_imguiReady = false;
@@ -174,7 +174,7 @@ void Application::renderLoop() {
         glClear(GL_COLOR_BUFFER_BIT);
         onRender(cameraCopy);
 
-#ifdef FLORA_IMGUI_ENABLED
+#ifdef TESSERA_IMGUI_ENABLED
         // Lazy init — GL context is current here in the render thread.
         if (!m_imguiReady) {
             imguiInit(m_window);
