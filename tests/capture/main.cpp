@@ -84,6 +84,8 @@ int main(int argc, char** argv) {
     const int eaterY   = argi(argc, argv, 15, -1);
     const int eaterRot = argi(argc, argv, 16, 0);    // 0..3 поворот пожирателя
     const int eaterShape = argi(argc, argv, 17, 0);  // 0 = eater1 (крючок), 1 = блок 2x2
+    // scene: 0 = guns (default), 1 = random 64x64, 2 = glider
+    const int scene    = argi(argc, argv, 18, 0);
 
     if (x1 <= x0 || y1 <= y0) {
         std::fprintf(stderr, "[capture] invalid region: (%d,%d)-(%d,%d)\n",
@@ -107,57 +109,70 @@ int main(int argc, char** argv) {
 
     TaskScheduler::instance().initialize();
 
-    // --- Build the scene: Gosper guns stamped across the field ---
+    // --- Build scene ---
     LifeRule rule{};
     rule.table[1][2] = 192;
     rule.table[1][3] = 255;
-    rule.table[0][3] = 64;   // same rule as the minimal-life demo (rainbow colours)
+    rule.table[0][3] = 64;   // rainbow life-like rule (matches minimal demo)
 
     auto map = std::make_unique<LifeLikeAutomaton>(gridW, gridH, CHUNK_SIZE,
                                                    TILE_SIZE, rule);
 
-    RlePattern gun = RleLoader::load("patterns/gosper_gun.rle");
-    if (gun.width > 0) {
-        // Wide spacing so each gun's diagonal glider stream stays clean and
-        // doesn't immediately collide with the next gun's output.
-        const int stepX = 200;
-        const int stepY = 200;
-        int count = 0;
-        for (int gj = 0; gj < gunsY; ++gj)
-            for (int gi = 0; gi < gunsX; ++gi) {
-                map->stampPattern(gun, 20 + gi * stepX, 20 + gj * stepY);
-                ++count;
-            }
-        std::fprintf(stderr, "[capture] stamped %d Gosper gun(s) from RLE\n", count);
+    if (scene == 1) {
+        // Random 64x64 field centered on the view region, seed 42, ~30% density.
+        const int ox = x0, oy = y0;
+        const int fw = std::min(64, x1 - x0), fh = std::min(64, y1 - y0);
+        uint32_t rng = 42;
+        auto lcg = [&]() { rng = rng * 1664525u + 1013904223u; return rng; };
+        for (int cy = 0; cy < fh; ++cy)
+            for (int cx = 0; cx < fw; ++cx)
+                if ((lcg() & 0xFF) < 77)   // ~30 %
+                    map->setTile(ox + cx, oy + cy, 255);
+        std::fprintf(stderr, "[capture] random scene %dx%d at (%d,%d)\n", fw, fh, ox, oy);
+
+    } else if (scene == 2) {
+        // Single glider (.O. / ..O / OOO) at (x0+4, y0+4).
+        const int gx = x0 + 4, gy = y0 + 4;
+        const int cells[5][2] = {{1,0},{2,1},{0,2},{1,2},{2,2}};
+        for (auto& c : cells) map->setTile(gx + c[0], gy + c[1], 255);
+        std::fprintf(stderr, "[capture] glider at (%d,%d)\n", gx, gy);
+
     } else {
-        std::fprintf(stderr, "[capture] gosper_gun.rle not found\n");
-    }
-
-    // Авто-пожиратель для одиночной пушки: ставим eater1 точно в поток глайдеров,
-    // на найденной чистой позиции (gun@(20,20) -> eater@(53,41), rot1). Глайдер
-    // съедается рядом с пушкой, связка периодична (период 30). Можно переопределить
-    // аргументами 14/15/16; отключить — передать eaterX < 0 явно... здесь же только
-    // подставляем дефолт, если позиция не задана и пушка одна.
-    int ex = eaterX, ey = eaterY, erot = eaterRot;
-    if (eaterX < 0 && eaterY < 0 && gunsX == 1 && gunsY == 1 && gun.width > 0) {
-        ex = 53; ey = 41; erot = 1;
-    }
-
-    // Пожиратель глайдеров. shape 0 = eater1 (крючок), shape 1 = блок 2x2.
-    if (ex >= 0 && ey >= 0) {
-        if (eaterShape == 1) {
-            const int blk[4][2] = { {0,0},{1,0},{0,1},{1,1} };
-            for (auto& c : blk) map->setTile(ex + c[0], ey + c[1], 255);
+        // Default: Gosper guns.
+        RlePattern gun = RleLoader::load("patterns/gosper_gun.rle");
+        if (gun.width > 0) {
+            const int stepX = 200, stepY = 200;
+            int count = 0;
+            for (int gj = 0; gj < gunsY; ++gj)
+                for (int gi = 0; gi < gunsX; ++gi) {
+                    map->stampPattern(gun, 20 + gi * stepX, 20 + gj * stepY);
+                    ++count;
+                }
+            std::fprintf(stderr, "[capture] stamped %d Gosper gun(s) from RLE\n", count);
         } else {
-            const int base[6][2] = { {0,0},{1,0},{0,1},{1,2},{2,2},{2,3} };
-            for (auto& c : base) {
-                int rx = c[0], ry = c[1];
-                for (int r = 0; r < (erot & 3); ++r) { int t = rx; rx = 3 - ry; ry = t; }
-                map->setTile(ex + rx, ey + ry, 255);
-            }
+            std::fprintf(stderr, "[capture] gosper_gun.rle not found\n");
         }
-        std::fprintf(stderr, "[capture] stamped eater shape %d at (%d,%d) rot %d\n",
-                     eaterShape, ex, ey, erot & 3);
+
+        // Auto-eater for a single gun (gun@(20,20) -> eater@(53,41), rot1).
+        int ex = eaterX, ey = eaterY, erot = eaterRot;
+        if (eaterX < 0 && eaterY < 0 && gunsX == 1 && gunsY == 1 && gun.width > 0) {
+            ex = 53; ey = 41; erot = 1;
+        }
+        if (ex >= 0 && ey >= 0) {
+            if (eaterShape == 1) {
+                const int blk[4][2] = { {0,0},{1,0},{0,1},{1,1} };
+                for (auto& c : blk) map->setTile(ex + c[0], ey + c[1], 255);
+            } else {
+                const int base[6][2] = { {0,0},{1,0},{0,1},{1,2},{2,2},{2,3} };
+                for (auto& c : base) {
+                    int rx = c[0], ry = c[1];
+                    for (int r = 0; r < (erot & 3); ++r) { int t = rx; rx = 3 - ry; ry = t; }
+                    map->setTile(ex + rx, ey + ry, 255);
+                }
+            }
+            std::fprintf(stderr, "[capture] stamped eater shape %d at (%d,%d) rot %d\n",
+                         eaterShape, ex, ey, erot & 3);
+        }
     }
 
     map->commitInitialState();

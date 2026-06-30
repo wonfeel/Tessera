@@ -9,17 +9,17 @@ OpenGL — not just read about them.
 
 ## Previews
 
-**Gosper gun + glider eater — a periodic, stable loop (period 30):**
+**Gosper gun + glider eater — a stable loop, period 30:**
 
 ![gun + eater](assets/gun_eater.gif)
 
-**3×3 guns — glider streams filling the field, spreads into new chunks on its own:**
+**Random 64×64 starting field — shows how life spreads into neighbouring chunks:**
 
-![3x3 guns](assets/guns_grid.gif)
+![random field](assets/random_field.gif)
 
-**Wider view — full gun scene with surrounding field context:**
+**Single glider — moves diagonally, crosses a chunk boundary at step 16:**
 
-![wide scene](assets/scene_wide.gif)
+![glider](assets/glider.gif)
 
 ---
 
@@ -137,33 +137,41 @@ and a GIF recorder (select a region, hit record).
 
 ---
 
-## Capture GIFs from the console
+## Capture GIFs
 
-There's a headless capture tool that renders a scene offscreen and saves a GIF —
-no window, no mouse, deterministic. Every step is captured (stride = 1).
+**Option 1 — GUI (`Demo_life_capture_ui`):**
+Run `Demo_life_capture_ui.exe` — an ImGui window where you pick the scene,
+set resolution, output path, and hit **Capture!**. The default output path
+is `%USERPROFILE%\Pictures\Tessera\capture.gif`.
 
+**Option 2 — command line:**
 ```bash
-# default output goes to %USERPROFILE%\Pictures\Tessera\capture.gif
+# gun + eater scene -> Pictures\Tessera\capture.gif
 python tools\capture_gif.py --exe out\build\x64-release\Test_capture.exe ^
-    --stop 60 --res 600x360 --region 14 14 80 60
+    --scene guns --stop 60 --res 600x360 --region 14 14 80 60
 
-# explicit path
+# random field
 python tools\capture_gif.py --exe out\build\x64-release\Test_capture.exe ^
-    --stop 80 --res 560x448 --region 0 0 280 224 --guns 3 3 --out my.gif
+    --scene random --stop 40 --res 320x320 --region 0 0 80 80 --out random.gif
+
+# single glider
+python tools\capture_gif.py --exe out\build\x64-release\Test_capture.exe ^
+    --scene glider --stop 60 --res 420x420 --region 0 0 35 35 --out glider.gif
 ```
 
-Key options:
+Key flags:
 
 | Flag | What it does |
 |------|--------------|
-| `--stop N` | capture N steps |
+| `--scene` | `guns` (default), `random`, `glider` |
+| `--stop N` | how many steps to capture |
 | `--res WxH` | output resolution in pixels |
-| `--region X0 Y0 X1 Y1` | which part of the grid to show (tile coords) |
-| `--guns GX GY` | stamp a GX×GY grid of Gosper guns |
-| `--delay ms` | milliseconds between GIF frames |
+| `--region X0 Y0 X1 Y1` | grid region to show (tile coords) |
+| `--guns GX GY` | GX×GY grid of Gosper guns (scene=guns only) |
+| `--delay ms` | ms between GIF frames |
 | `--out path` | output path (default: Pictures\Tessera\capture.gif) |
 
-Requires Pillow: `pip install pillow`.
+Every step is captured (stride = 1 — not configurable). Requires Pillow: `pip install pillow`.
 
 ---
 
