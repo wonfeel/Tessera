@@ -174,15 +174,17 @@ void SimulationCoordinator::commitReady(const Camera2D& camera) {
                 // собираем их координаты для активации (для всех чанков, не только
                 // видимых, иначе off-screen эволюция замирает на границах).
                 collectBorderNeighbors(*c, activateNeighbors);
+                // recalcLiveCells нужен всегда — иначе невидимый чанк может быть
+                // удалён по устаревшему счётчику (живые клетки ушли за экран,
+                // liveCells не обновился, чанк помечается пустым и стирается).
+                c->recalcLiveCells();
                 if (visible) {
-                    c->recalcLiveCells();
                     c->updateRenderData();
-                    if (c->liveCells.load(std::memory_order_acquire) == 0)
-                        emptyCoords.push_back(ChunkCoord(c->worldOffset.x / m_chunkSize, c->worldOffset.y / m_chunkSize));
-                }
-                else {
+                } else {
                     c->dirty.store(true, std::memory_order_release);
                 }
+                if (c->liveCells.load(std::memory_order_acquire) == 0)
+                    emptyCoords.push_back(ChunkCoord(c->worldOffset.x / m_chunkSize, c->worldOffset.y / m_chunkSize));
             }
         }
 
