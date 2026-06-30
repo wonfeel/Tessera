@@ -77,6 +77,8 @@ def main():
     ap.add_argument("--grid", type=int, default=1024, help="field size in tiles (square)")
     ap.add_argument("--delay", type=int, default=60, help="ms between GIF frames")
     ap.add_argument("--colors", type=int, default=128, help="GIF palette size (2-256)")
+    ap.add_argument("--guns", type=int, nargs=2, metavar=("GX", "GY"), default=[1, 1],
+                    help="number of Gosper guns horizontally and vertically (default: 1 1)")
     ap.add_argument("--workdir", default=None,
                     help="working dir for the exe (defaults to the exe's folder)")
     args = ap.parse_args()
@@ -97,11 +99,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix="tessera_capture_") as tmp:
         # Test_capture arg order:
         #   outDir stopStep stride resW resH x0 y0 x1 y1 gridW gridH
+        gx, gy = args.guns
         cmd = [exe, tmp,
                str(args.stop), str(STRIDE),
                str(resW), str(resH),
                str(x0), str(y0), str(x1), str(y1),
-               str(args.grid), str(args.grid)]
+               str(args.grid), str(args.grid),
+               str(gx), str(gy)]
         print("Running capture:", " ".join(cmd))
         res = subprocess.run(cmd, cwd=workdir, capture_output=True, text=True)
         if res.stderr:

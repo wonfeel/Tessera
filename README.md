@@ -1,9 +1,25 @@
 # Tessera
 
-A small 2D engine that runs cellular automata (like Conway's Game of Life) on a
-chunked world and renders it with OpenGL. I built this to actually understand the
-stuff that doesn't click from books alone — threads, a thread pool, CUDA, and how
-to keep a big simulation from stuttering.
+A 2D cellular-automaton engine in C++/CUDA/OpenGL. The world is chunked — only live
+chunks are simulated, gliders cross chunk boundaries correctly, simulation and rendering
+run on separate threads. Built to actually understand threads, thread pools, CUDA, and
+OpenGL — not just read about them.
+
+---
+
+## Previews
+
+**Gosper gun + glider eater — a periodic, stable loop (period 30):**
+
+![gun + eater](assets/gun_eater.gif)
+
+**3×3 guns — glider streams filling the field, spreads into new chunks on its own:**
+
+![3x3 guns](assets/guns_grid.gif)
+
+**Wider view — full gun scene with surrounding field context:**
+
+![wide scene](assets/scene_wide.gif)
 
 ---
 
@@ -111,13 +127,43 @@ Controls (full demo):
 
 ```
 LMB        draw cells           Space      pause / resume
-RMB        erase cells          Step >      one step while paused
-MMB drag   pan                  WASD        pan with the keyboard
-Scroll     zoom to cursor       slider      simulation speed
+RMB        erase cells          Step >     one step while paused
+MMB drag   pan                  WASD       pan with the keyboard
+Scroll     zoom to cursor       slider     simulation speed
 ```
 
 The left panel also has a pattern picker (any `patterns/*.rle`), Clear / Randomize,
 and a GIF recorder (select a region, hit record).
+
+---
+
+## Capture GIFs from the console
+
+There's a headless capture tool that renders a scene offscreen and saves a GIF —
+no window, no mouse, deterministic. Every step is captured (stride = 1).
+
+```bash
+# default output goes to %USERPROFILE%\Pictures\Tessera\capture.gif
+python tools\capture_gif.py --exe out\build\x64-release\Test_capture.exe ^
+    --stop 60 --res 600x360 --region 14 14 80 60
+
+# explicit path
+python tools\capture_gif.py --exe out\build\x64-release\Test_capture.exe ^
+    --stop 80 --res 560x448 --region 0 0 280 224 --guns 3 3 --out my.gif
+```
+
+Key options:
+
+| Flag | What it does |
+|------|--------------|
+| `--stop N` | capture N steps |
+| `--res WxH` | output resolution in pixels |
+| `--region X0 Y0 X1 Y1` | which part of the grid to show (tile coords) |
+| `--guns GX GY` | stamp a GX×GY grid of Gosper guns |
+| `--delay ms` | milliseconds between GIF frames |
+| `--out path` | output path (default: Pictures\Tessera\capture.gif) |
+
+Requires Pillow: `pip install pillow`.
 
 ---
 
