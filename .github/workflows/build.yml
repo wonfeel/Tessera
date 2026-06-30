@@ -16,6 +16,10 @@ jobs:
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
+      - name: Install Mesa (software OpenGL for headless tests)
+        run: choco install mesa -y --no-progress
+        shell: pwsh
+
       - name: Configure (CPU-only, no CUDA)
         run: cmake --preset x64-release
         working-directory: ${{ github.workspace }}
