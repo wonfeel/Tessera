@@ -13,6 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Configure (CPU-only, no CUDA)
         run: cmake --preset x64-release
         working-directory: ${{ github.workspace }}
