@@ -10,12 +10,14 @@
 #include "engine/graphics/Camera2D.h"
 #include "engine/utils/RleLoader.h"
 #include <unordered_map>
+#include <unordered_set>
 #include <shared_mutex>
 #include <vector>
 #include <queue>
 #include <mutex>
 #include <atomic>
 #include <memory>
+#include <cmath>
 
 class ChunkedTileMap : public IIndexedTileMap {
 public:
@@ -53,8 +55,19 @@ public:
     // прогона (захват кадров, тесты), где нужен предсказуемый порядок шагов.
     void simulateAndWait();
 
-    const std::vector<ChunkCoord>& getActiveChunks() const { return m_store.active(); }
+    const std::unordered_set<ChunkCoord>& getActiveChunks() const { return m_store.active(); }
     virtual void simulateChunk(Chunk& chunk) {}
+
+    // Считает пачку чанков (тот же батч, что TaskScheduler отдал одному
+    // worker-потоку). По умолчанию — просто цикл по simulateChunk(), это
+    // safety-net для автоматов, которым батчинг не нужен (CellularAutomaton,
+    // любой CPU-only случай). LifeLikeAutomaton переопределяет это, чтобы
+    // отдать весь батч бэкенду одним вызовом, когда тот это поддерживает
+    // (см. ISimulationBackend::preferBatch).
+    virtual void simulateChunkBatch(const std::vector<std::shared_ptr<Chunk>>& chunks) {
+        for (auto& c : chunks)
+            if (c) simulateChunk(*c);
+    }
 
     Chunk* getOrCreateChunk(ChunkCoord coord);
     void setPalette(const std::vector<glm::vec3>& palette);
@@ -77,10 +90,14 @@ public:
     // Рисование кистью size×size клеток с центром в тайле (tileX,tileY).
     void paintBrush(int tileX, int tileY, int size, uint8_t state);
 
-    // Перевод мировой позиции (в пикселях) в координаты тайла.
+    // Перевод мировой позиции (в пикселях) в координаты тайла. std::floor, а не
+    // усечение к нулю — иначе для отрицательных мировых координат (поле теперь
+    // безгранично в обе стороны) тайл на границе нуля вычисляется неверно
+    // (напр. world.x=-0.5, ts=2.0: усечение даёт тайл 0, а верный ответ — тайл -1).
     glm::ivec2 worldToTile(const glm::vec2& world) const {
         float ts = m_grid.tileSize();
-        return glm::ivec2(static_cast<int>(world.x / ts), static_cast<int>(world.y / ts));
+        return glm::ivec2(static_cast<int>(std::floor(world.x / ts)),
+                           static_cast<int>(std::floor(world.y / ts)));
     }
 
     // Штамповать RLE-паттерн с верхним левым углом в (worldX, worldY).
