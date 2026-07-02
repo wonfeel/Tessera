@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Tessera — новая демка</title>
+<style>
+  :root{
+    --bg:#ffffff; --text:#1c1c1a; --text-muted:#767568;
+    --code-bg:#f1f0eb; --border:#e3e1d8; --border-strong:#ddd9cb;
+    --table-bg:#faf9f5; --table-border:#e9e7df; --hr:#ddd;
+    --warn-bg:#fbf3e6; --warn-accent:#a35b00;
+  }
+  html[data-theme="dark"]{
+    --bg:#151513; --text:#c9c8c2; --text-muted:#8b8a80;
+    --code-bg:#1e1e1b; --border:#333; --border-strong:#3a3a36;
+    --table-bg:#1b1b18; --table-border:#2a2a27; --hr:#2a2a27;
+    --warn-bg:#241d10; --warn-accent:#d99a3d;
+  }
+  body{ max-width:820px; margin:50px auto 120px; padding:0 20px; font-family:-apple-system,"Segoe UI",Arial,sans-serif; font-size:15px; line-height:1.6; color:var(--text); background:var(--bg); }
+  h1{ font-size:22px; margin:0 0 4px; }
+  h2{ font-size:16px; margin:44px 0 12px; padding-bottom:6px; border-bottom:1px solid var(--hr); }
+  h3{ font-size:14px; margin:22px 0 8px; }
+  p{ margin:0 0 12px; }
+  ul,ol{ margin:0 0 12px; padding-left:22px; }
+  li{ margin:0 0 5px; }
+  code{ font-family:Consolas,"SFMono-Regular",monospace; font-size:0.87em; background:var(--code-bg); border:1px solid var(--border); border-radius:3px; padding:0.05em 0.35em; }
+  pre{ font-family:Consolas,"SFMono-Regular",monospace; font-size:12.5px; background:var(--code-bg); border:1px solid var(--border); border-radius:6px; padding:10px 12px; overflow-x:auto; line-height:1.5; }
+  pre code{ background:none; border:none; padding:0; }
+  table{ width:100%; border-collapse:separate; border-spacing:0; font-size:13.5px; margin:0 0 16px;
+         background:var(--table-bg); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  th{ text-align:left; font-weight:600; font-size:12px; padding:8px 12px; border-bottom:1px solid var(--border-strong); }
+  td{ padding:8px 12px; border-bottom:1px solid var(--table-border); vertical-align:top; }
+  tr:last-child td{ border-bottom:none; }
+  .path{ color:var(--text-muted); }
+  .meta{ color:var(--text-muted); font-size:13px; }
+  .warn{ background:var(--warn-bg); border-left:3px solid var(--warn-accent); border-radius:0 6px 6px 0; padding:12px 16px; margin:14px 0; }
+  .warn b{ display:block; margin-bottom:2px; }
+
+  .theme-toggle{
+    position:fixed; top:16px; right:16px; font-family:Consolas,monospace; font-size:12px;
+    background:var(--code-bg); border:1px solid var(--border); color:var(--text);
+    border-radius:6px; padding:6px 10px; cursor:pointer;
+  }
+  .theme-toggle:hover{ border-color:var(--border-strong); }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" id="themeToggle" type="button">☾ тема</button>
+
+<h1>Новая демка</h1>
+<p class="meta">Потоки/барьер/GL — в <a href="architecture.html">architecture.html</a>.</p>
+
+<h2>Обнаружение таргетов</h2>
+<p><code>fe_discover_apps</code> в CMakeLists.txt сама находит любой <code>main.cpp</code> под <code>demo/</code> и <code>tests/</code>, руками ничего не регистрируется. Имя таргета — из пути:</p>
+<pre>demo/life/full/main.cpp   →  Demo_life_full
+tests/capture/main.cpp    →  Test_capture</pre>
+<p>Соседние <code>.cpp</code> в той же папке подхватываются как часть таргета.</p>
+
+<h2>Скелет</h2>
+<pre>#include "engine/core/DefaultApplication.h"
+#include "engine/core/TaskScheduler.h"
+#include "demo/life/full/LifeMap.h"
+
+int main() {
+    TaskScheduler::instance().initialize();
+
+    auto factory = []() -> std::unique_ptr&lt;ChunkedTileMap&gt; {
+        auto map = std::make_unique&lt;LifeMap&gt;(0x400, 0x400, 2.0f, 64);
+        map-&gt;randomize(0.3f);
+        map-&gt;commitInitialState();   // без этого первый кадр пустой
+        return map;
+    };
+
+    DefaultApplication app(factory, std::chrono::milliseconds(0),
+        1920, 1080, "название", true);
+    app.run();
+
+    TaskScheduler::instance().shutdown();
+}</pre>
+<p><code>commitInitialState()</code> переносит <code>simBuffer → renderBuffer</code> и грузит в GL. Забыл — чёрный экран, движок при этом молчит.</p>
+
+<h2>Своё правило</h2>
+<p>Наследник <code>LifeLikeAutomaton</code>, конструктор — <code>(w, h, chunkSize, tileSize, rule)</code>:</p>
+<pre>class MyRuleMap : public LifeLikeAutomaton {
+public:
+    MyRuleMap(int w, int h, float ts, int chunkSize = 64)
+        : LifeLikeAutomaton(w, h, chunkSize, ts, makeRule()) {}
+private:
+    static LifeRule makeRule() {
+        LifeRule r{};
+        r.table[0][3] = 255;   // рождение при 3
+        r.table[1][2] = 255;   // выживание при 2
+        r.table[1][3] = 255;   // выживание при 3
+        return r;
+    }
+};</pre>
+
+<h2>Свой ввод / ImGui</h2>
+<p>Наследник <code>DefaultApplication</code>, переопределить <code>onUpdate</code>/<code>onImGuiExtra</code>. <code>onUpdate</code> — update-поток, GL там нет. Не забыть <code>DefaultApplication::onUpdate(dt)</code> внутри override — там пауза/шаг/симуляция.</p>
+
+<h2>Паттерны</h2>
+<p><code>.rle</code> — в <code>demo/life/patterns/</code>, копируются в <code>${CMAKE_BINARY_DIR}/patterns</code> один раз для всех таргетов. В коде — относительный путь: <code>RleLoader::load("patterns/имя.rle")</code>.</p>
+
+<h2>Без окна</h2>
+<p><code>simulateAndWait()</code> вместо цикла <code>DefaultApplication</code> — синхронный шаг, блокируется до конца поколения. См. <code>tests/capture</code>, <code>tests/correctness</code>.</p>
+
+<script>
+(function(){
+  var root = document.documentElement;
+  var btn = document.getElementById('themeToggle');
+  var stored = localStorage.getItem('theme');
+  apply(stored || 'dark');
+
+  btn.addEventListener('click', function(){
+    apply(root.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+  });
+
+  function apply(theme){
+    root.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+    btn.textContent = theme === 'dark' ? '☀ тема' : '☾ тема';
+  }
+})();
+</script>
+</body>
+</html>
