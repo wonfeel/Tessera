@@ -14,11 +14,6 @@ The world is chunked — only live chunks are simulated, gliders cross chunk bou
 simulation and rendering run on separate threads. Built to actually understand threads, thread
 pools, CUDA, and OpenGL — not just read about them.
 
-> [!Note]
-> The architecture/demo-authoring links above need GitHub Pages enabled for this repo
-> (Settings → Pages → Deploy from a branch → `main` / `docs`). Until then they 404 —
-> the files themselves are already in `docs/architecture.html` and `docs/new-demo.html`.
-
 **The problem:** simulate an effectively unbounded field, updating only the live regions,
 in parallel across CPU/GPU, without ever stalling the render.
 **The approach:** split the world into chunks; simulate live chunks on a custom thread pool;

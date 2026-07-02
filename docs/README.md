@@ -1,0 +1,1 @@
+Подробный гайд по **[Архитектуре проекта](https://wonfeel.github.io/Tessera/architecture.html)** и **[по добавления новых демок](https://wonfeel.github.io/Tessera/new-demo.html)**
