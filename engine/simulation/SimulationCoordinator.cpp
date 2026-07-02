@@ -51,13 +51,20 @@ bool SimulationCoordinator::simulateActive() {
     for (size_t i = 0; i < total; i += batch) {
         size_t end = std::min(i + batch, total);
         TaskScheduler::instance().schedule([this, activeCopy, i, end, gen, tasksRemaining]() {
+            // Собираем непустые чанки этого батча и считаем их одним вызовом
+            // simulateChunkBatch — см. комментарий у SimulationCoordinator.
+            std::vector<std::shared_ptr<Chunk>> batchChunks;
+            batchChunks.reserve(end - i);
             for (size_t j = i; j < end; ++j) {
                 auto& chunk = (*activeCopy)[j];
-                if (chunk) {
-                    m_simulateOne(*chunk);
-                    enqueueReady(chunk, gen);
-                }
+                if (chunk) batchChunks.push_back(chunk);
             }
+
+            m_simulateBatch(batchChunks);
+
+            for (auto& chunk : batchChunks)
+                enqueueReady(chunk, gen);
+
             if (tasksRemaining->fetch_sub(1) == 1) {
                 // Все чанки посчитаны и поставлены в очередь — поколение готово к commit.
                 m_phase.store(Phase::ReadyToCommit, std::memory_order_release);

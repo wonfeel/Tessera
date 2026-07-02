@@ -1,6 +1,7 @@
 // engine/simulation/ISimulationBackend.h
 #pragma once
 #include <cstdint>
+#include <vector>
 #include "engine/simulation/LifeRule.h"
 
 // Абстракция вычислителя одного шага клеточного автомата над одним чанком.
@@ -39,6 +40,27 @@ public:
 
     // true если бэкенд поддерживает CUDA-GL interop (только CudaLifeBackend).
     virtual bool supportsGLInterop() const { return false; }
+
+    // true если бэкенду выгоднее считать много чанков одним вызовом
+    // simulateBatch(), а не по одному через simulate(). На GPU каждый вызов
+    // simulate() — это H2D + kernel launch + D2H под мьютексом; при десятках-
+    // сотнях мелких активных чанков (обычный chunkSize=64) overhead запуска
+    // ядра и синхронных копий доминирует над самим счётом. CPU-бэкенду батчинг
+    // не нужен — параллелизм там уже даёт TaskScheduler, гоняя simulate()
+    // одновременно из разных потоков.
+    virtual bool preferBatch() const { return false; }
+
+    // Считает N независимых чанков одним вызовом (для GPU — один kernel launch
+    // на все N вместо N отдельных). exts[i]/outs[i] — те же буферы, что и в
+    // simulate(), просто по одному на чанк; все extW одинаковые (общий chunkSize).
+    // Реализация по умолчанию — просто цикл по simulate(), корректна для любого
+    // бэкенда и служит safety-net, если конкретная реализация не переопределила.
+    virtual void simulateBatch(const std::vector<const uint8_t*>& exts, int extW,
+                               const std::vector<uint8_t*>& outs, int S,
+                               const LifeRule& rule) {
+        for (size_t i = 0; i < exts.size(); ++i)
+            simulate(exts[i], extW, outs[i], S, rule);
+    }
 
     // Человекочитаемое имя бэкенда ("CPU" / "CUDA") — для логов и бенчмарков.
     virtual const char* name() const = 0;

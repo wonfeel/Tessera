@@ -9,7 +9,7 @@
 ChunkedTileMap::ChunkedTileMap(int totalWidth, int totalHeight, int chunkSize, float tileSize)
     : m_grid(totalWidth, totalHeight, chunkSize, tileSize),
       m_sim(m_store, chunkSize, tileSize,
-            [this](Chunk& c) { simulateChunk(c); },
+            [this](const std::vector<std::shared_ptr<Chunk>>& chunks) { simulateChunkBatch(chunks); },
             [this](const std::vector<ChunkCoord>& coords) { ensureActiveChunks(coords); }),
       m_renderer(m_store, chunkSize, tileSize)
 {
@@ -32,7 +32,6 @@ std::shared_ptr<Chunk> ChunkedTileMap::getChunkShared(ChunkCoord coord) const {
 }
 
 std::string ChunkedTileMap::getTileInfo(int x, int y) const {
-    if (!m_grid.inBounds(x, y)) return "";
     int state = getTileState(x, y);
     std::ostringstream oss;
     oss << "Cell(" << x << "," << y << ") State=" << state;
@@ -45,7 +44,6 @@ std::shared_ptr<Chunk> ChunkedTileMap::createChunk(const ChunkCoord& coord,
 }
 
 void ChunkedTileMap::setTile(int x, int y, int state) {
-    if (!m_grid.inBounds(x, y)) return;
     CellLocation loc = m_grid.locate(x, y);
 
     Chunk* chunk = nullptr;
@@ -63,7 +61,6 @@ void ChunkedTileMap::setTile(int x, int y, int state) {
 }
 
 void ChunkedTileMap::setTileDirect(int x, int y, uint8_t state) {
-    if (!m_grid.inBounds(x, y)) return;
     CellLocation loc = m_grid.locate(x, y);
 
     Chunk* chunk = nullptr;
@@ -77,13 +74,9 @@ void ChunkedTileMap::setTileDirect(int x, int y, uint8_t state) {
 }
 
 void ChunkedTileMap::ensureActiveChunks(const std::vector<ChunkCoord>& coords) {
-    const int cs = m_grid.chunkSize();
     std::unique_lock<std::shared_mutex> lock(m_store.mutex());
     for (const ChunkCoord& coord : coords) {
-        // Не выходим за границы мира.
-        int ox = coord.x() * cs, oy = coord.y() * cs;
-        if (ox < 0 || oy < 0 || ox >= m_grid.width() || oy >= m_grid.height())
-            continue;
+        // Поле безгранично — граница мира больше не отсекает соседей.
         Chunk* c = getOrCreateChunk(coord);
         if (!c->active) {
             c->active = true;
@@ -100,7 +93,6 @@ void ChunkedTileMap::paintBrush(int tileX, int tileY, int size, uint8_t state) {
 }
 
 void ChunkedTileMap::paintTile(int x, int y, uint8_t state) {
-    if (!m_grid.inBounds(x, y)) return;
     CellLocation loc = m_grid.locate(x, y);
 
     Chunk* chunk = nullptr;
@@ -149,7 +141,6 @@ void ChunkedTileMap::applyDefaultPalette() {
 }
 
 int ChunkedTileMap::getTileState(int x, int y) const {
-    if (!m_grid.inBounds(x, y)) return 0;
     CellLocation loc = m_grid.locate(x, y);
     auto it = m_store.map().find(loc.coord);
     if (it == m_store.map().end()) return 0;
@@ -158,7 +149,6 @@ int ChunkedTileMap::getTileState(int x, int y) const {
 }
 
 int ChunkedTileMap::getSimTileState(int x, int y) const {
-    if (!m_grid.inBounds(x, y)) return 0;
     CellLocation loc = m_grid.locate(x, y);
     auto it = m_store.map().find(loc.coord);
     if (it == m_store.map().end()) return 0;
@@ -245,7 +235,8 @@ void ChunkedTileMap::clearAllRenderTiles(uint8_t value) {
 
 std::vector<ChunkCoord> ChunkedTileMap::snapshotActiveChunks() const {
     std::shared_lock<std::shared_mutex> lock(m_store.mutex());
-    return m_store.active();
+    const auto& active = m_store.active();
+    return std::vector<ChunkCoord>(active.begin(), active.end());
 }
 
 void ChunkedTileMap::commitInitialState() {

@@ -18,20 +18,27 @@
 // Вынесено из ChunkedTileMap: здесь живут поколения (generations), раскидывание
 // задач по TaskScheduler, очередь "готовых" чанков и их commit в рендер-буфер.
 //
-// Координатор НЕ знает правило автомата — он принимает функтор simulateOne,
-// который считает один чанк (это виртуальный simulateChunk у карты). Так
-// сохраняется инверсия зависимостей: оркестрация отделена от вычисления правила.
+// Координатор НЕ знает правило автомата — он принимает функтор simulateBatch,
+// который считает целую пачку чанков (это виртуальный simulateChunkBatch у
+// карты). Так сохраняется инверсия зависимостей: оркестрация отделена от
+// вычисления правила.
+//
+// Пачка — не произвольная: это ровно тот батч чанков, что TaskScheduler отдал
+// одному worker-потоку (см. simulateActive()). Для CPU-бэкенда внутри батча
+// всё равно цикл по чанкам; для CUDA-бэкенда это даёт один kernel launch на
+// весь батч вместо одного на чанк — при chunkSize=64 и десятках активных
+// чанков overhead launch'а и синхронных H2D/D2H иначе доминирует над счётом.
 class SimulationCoordinator {
 public:
-    using SimulateOne = std::function<void(Chunk&)>;
+    using SimulateBatch = std::function<void(const std::vector<std::shared_ptr<Chunk>>&)>;
     // Создать (если нужно) и активировать перечисленные чанки. Через колбэк, т.к.
     // создание чанка — забота карты (виртуальный createChunk + проверка границ мира).
     using EnsureActive = std::function<void(const std::vector<ChunkCoord>&)>;
 
     SimulationCoordinator(ChunkStore& store, int chunkSize, float tileSize,
-                          SimulateOne simulateOne, EnsureActive ensureActive)
+                          SimulateBatch simulateBatch, EnsureActive ensureActive)
         : m_store(store), m_chunkSize(chunkSize), m_tileSize(tileSize),
-          m_simulateOne(std::move(simulateOne)),
+          m_simulateBatch(std::move(simulateBatch)),
           m_ensureActive(std::move(ensureActive)) {}
 
     // Асинхронный шаг: ставит фазу Computing и раскидывает чанки по пулу.
@@ -66,7 +73,7 @@ private:
     ChunkStore& m_store;
     int         m_chunkSize;
     float       m_tileSize;
-    SimulateOne m_simulateOne;
+    SimulateBatch m_simulateBatch;
     EnsureActive m_ensureActive;
 
     std::atomic<Phase> m_phase{ Phase::Idle };

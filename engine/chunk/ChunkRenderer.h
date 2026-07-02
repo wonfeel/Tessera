@@ -34,7 +34,15 @@ private:
     static void initStatics();
     void setupQuad();
     void setupInstanceBuffer();
+    // Создаёт VAO/VBO/EBO при первом использовании (render()/updateIndices()).
+    // Конструктор Chunk (а с ним и ChunkRenderer) может вызываться из update-
+    // потока (paintTile/stampPattern создают чанк там же), а GL-контекст живёт
+    // только в рендер-потоке — GL-вызовы из конструктора там были бы no-op'ами
+    // с точки зрения драйвера, оставляя VAO/VBO нулевыми и чанк невидимым
+    // навсегда, хотя симуляция продолжает его честно считать.
+    void ensureGLReady();
 
+    bool m_glReady = false;
     unsigned int VAO = 0, VBO = 0, EBO = 0;
     unsigned int instanceVBO = 0;
 

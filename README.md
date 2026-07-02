@@ -9,10 +9,32 @@
 
 **[Русский](README_RU.md)**
 
-A 2D cellular-automaton engine in C++/CUDA/OpenGL. The world is chunked — only live
-chunks are simulated, gliders cross chunk boundaries correctly, simulation and rendering
-run on separate threads. Built to actually understand threads, thread pools, CUDA, and
-OpenGL — not just read about them.
+A 2D cellular-automaton engine in C++/CUDA/OpenGL, released under the [MIT license](LICENSE).
+The world is chunked — only live chunks are simulated, gliders cross chunk boundaries correctly,
+simulation and rendering run on separate threads. Built to actually understand threads, thread
+pools, CUDA, and OpenGL — not just read about them.
+
+**The problem:** simulate an effectively unbounded field, updating only the live regions,
+in parallel across CPU/GPU, without ever stalling the render.
+**The approach:** split the world into chunks; simulate live chunks on a custom thread pool;
+keep compute and commit from overlapping with a phase barrier; run the same rule unchanged on
+CPU or a CUDA backend; give rendering its own thread so a heavy step never drops a frame.
+
+---
+
+## Contents
+
+- [Previews](#previews)
+- [Why I made this](#why-i-made-this)
+- [What it can do](#what-it-can-do)
+- [How it's put together](#how-its-put-together)
+- [Benchmark](#benchmark)
+- [Requirements](#requirements)
+- [Build](#build)
+- [Demos](#demos)
+- [Capture GIFs](#capture-gifs)
+- [Tests](#tests)
+- [What's not done yet](#whats-not-done-yet)
 
 ---
 
@@ -25,6 +47,10 @@ OpenGL — not just read about them.
 **Random 64×64 starting field — shows how life spreads into neighbouring chunks:**
 
 ![random field](assets/random_field.gif)
+
+**Same kind of random start, recorded live from the interactive demo as it settles into stable colonies:**
+
+![field](assets/field.gif)
 
 **Capture UI — ImGui interface for configuring and launching headless GIF exports:**
 
@@ -105,10 +131,21 @@ Run it yourself: `Test_benchmark <chunkSize> <iterations>`.
 
 ---
 
+## Requirements
+
+- Windows
+- Visual Studio 2022 (MSVC toolchain)
+- CMake 3.20+ and Ninja
+- CUDA Toolkit — optional, only needed for the GPU backend
+- Python 3 + Pillow (`pip install pillow`) — only needed for `tools/capture_gif.py`
+
+GLFW / GLAD / GLM / ImGui are vendored in `libs/`, nothing else to install.
+
+---
+
 ## Build
 
-Windows, Visual Studio 2022, CMake + Ninja. GLFW / GLAD / GLM / ImGui are vendored
-in `libs/`, nothing to install separately.
+Windows, Visual Studio 2022, CMake + Ninja.
 
 ```bash
 cmake --preset x64-release
@@ -213,4 +250,3 @@ other side with the right shape and offset.
 - CUDA-GL interop still falls back to the regular copy path on WDDM (the
   simulation runs on worker threads where the GL context isn't current).
 - Only 2-state, totalistic "life-like" rules so far (no multi-state automata).
-- The world is a fixed size, not truly infinite.

@@ -153,10 +153,10 @@ add_custom_target(copy_assets ALL
         "${CMAKE_CURRENT_SOURCE_DIR}/Shaders" "${CMAKE_BINARY_DIR}/Shaders"
     COMMENT "Copying shaders"
 )
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/patterns")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demo/life/patterns")
     add_custom_command(TARGET copy_assets POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/patterns" "${CMAKE_BINARY_DIR}/patterns"
+            "${CMAKE_CURRENT_SOURCE_DIR}/demo/life/patterns" "${CMAKE_BINARY_DIR}/patterns"
         COMMENT "Copying patterns"
     )
 endif()

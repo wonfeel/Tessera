@@ -5,6 +5,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <algorithm>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "engine/input/Input.h"
@@ -25,6 +26,25 @@ public:
 
     Camera2D& getCamera() { return m_camera; }
     const Camera2D& getCamera() const { return m_camera; }
+
+    // Подогнать камеру под прямоугольник мировых координат [worldMin, worldMax]
+    // (с отступом по краям) — центрирует и подбирает zoom, чтобы весь регион
+    // влез в окно. Потокобезопасно: рендер-поток читает камеру под тем же
+    // мьютексом (см. renderLoop), поэтому запись сюда тоже должна быть под ним —
+    // в отличие от getCamera(), которую вызывающие используют до старта
+    // рендер-потока (onInit) или из update-потока для чтения без гонки на запись.
+    void frameCamera(glm::vec2 worldMin, glm::vec2 worldMax, float marginPx = 0.0f) {
+        worldMin -= glm::vec2(marginPx, marginPx);
+        worldMax += glm::vec2(marginPx, marginPx);
+        glm::vec2 regionSize = worldMax - worldMin;
+        if (regionSize.x <= 0.0f || regionSize.y <= 0.0f) return;
+
+        std::lock_guard<std::mutex> lock(m_cameraMutex);
+        float newZoom = std::min(m_camera.width / regionSize.x, m_camera.height / regionSize.y);
+        m_camera.zoom = glm::clamp(newZoom, 0.001f, 1000.0f);
+        glm::vec2 center = (worldMin + worldMax) * 0.5f;
+        m_camera.position = center - glm::vec2(m_camera.width, m_camera.height) * 0.5f / m_camera.zoom;
+    }
 
 protected:
     virtual void onInit() = 0;

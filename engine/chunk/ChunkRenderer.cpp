@@ -25,9 +25,15 @@ static const unsigned int quadIndices[] = { 0, 1, 2, 2, 3, 0 };
 
 ChunkRenderer::ChunkRenderer(int chunkSize) : m_chunkSize(chunkSize),
 m_instanceCount(chunkSize* chunkSize) {
+    // Никаких GL-вызовов здесь — см. комментарий у ensureGLReady() в заголовке.
+}
+
+void ChunkRenderer::ensureGLReady() {
+    if (m_glReady) return;
     initStatics();
     setupQuad();
     setupInstanceBuffer();
+    m_glReady = true;
 }
 
 ChunkRenderer::~ChunkRenderer() {
@@ -122,11 +128,13 @@ void ChunkRenderer::setupInstanceBuffer() {
 }
 
 void ChunkRenderer::updateIndices(const uint8_t* data) {
+    ensureGLReady();
     glBindBuffer(GL_ARRAY_BUFFER, instanceVBO);
     glBufferSubData(GL_ARRAY_BUFFER, 0, m_instanceCount * sizeof(uint8_t), data);
 }
 
 void ChunkRenderer::render(const Camera2D& camera, const glm::ivec2& chunkOffset, float tileSize) {
+    ensureGLReady();
     if (!s_shader) return;
 
     s_shader->use();

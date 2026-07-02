@@ -23,6 +23,11 @@ public:
 
 protected:
     void simulateChunk(Chunk& chunk) override;
+    // Разделяет батч на GL-interop чанки (у каждого свой VBO, считаются по
+    // одному через simulateChunk — как раньше) и "обычные" (без VBO), которые
+    // при preferBatch() у бэкенда уходят одним вызовом ISimulationBackend::
+    // simulateBatch() вместо N отдельных simulate(). См. ISimulationBackend.h.
+    void simulateChunkBatch(const std::vector<std::shared_ptr<Chunk>>& chunks) override;
 
     LifeRule m_rule;
     std::unique_ptr<ISimulationBackend> m_backend;

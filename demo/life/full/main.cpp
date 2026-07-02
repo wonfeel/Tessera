@@ -36,7 +36,7 @@ public:
     InteractiveApp()
         : DefaultApplication(
             []() -> std::unique_ptr<ChunkedTileMap> {
-                auto map = std::make_unique<LifeMap>(0x200, 0x200, 2.0f, 64);
+                auto map = std::make_unique<LifeMap>(0x400, 0x400, 2.0f, 128);
                 map->randomize(0.3f);
                 return map;
             },
@@ -237,6 +237,12 @@ private:
         m_regX0 = gx - 4;  m_regY0 = gy - 4;
         m_regX1 = gx + 48; m_regY1 = gy + 40;
         m_haveRegion = true;
+        // gx/gy фиксированы, а не привязаны к центру карты — камера может
+        // оказаться где угодно (особенно на большой номинальной карте), поэтому
+        // тоже подгоняем её сюда, как и для обычных паттернов.
+        float ts = m_tileMap->getTileSize();
+        frameCamera(glm::vec2(m_regX0.load(), m_regY0.load()) * ts,
+                    glm::vec2(m_regX1.load(), m_regY1.load()) * ts, 4.0f * ts);
     }
 
     // Загружает выбранный RLE-паттерн по центру поля. Выполняется в update-потоке.
@@ -256,6 +262,12 @@ private:
         m_regX0 = ox - 4;               m_regY0 = oy - 4;
         m_regX1 = ox + pat.width + 4;   m_regY1 = oy + pat.height + 4;
         m_haveRegion = true;
+        // Подгоняем камеру под паттерн — иначе большие паттерны (тысячи клеток)
+        // видны только маленьким уголком при текущем zoom, а симуляция при этом
+        // честно считается по всему полю — выглядит как "не загрузилось".
+        float ts = m_tileMap->getTileSize();
+        frameCamera(glm::vec2(ox, oy) * ts,
+                    glm::vec2(ox + pat.width, oy + pat.height) * ts, 4.0f * ts);
         std::snprintf(m_status, sizeof(m_status), "Loaded %s (%dx%d)",
                       std::filesystem::path(path).stem().string().c_str(),
                       pat.width, pat.height);

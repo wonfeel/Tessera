@@ -3,6 +3,7 @@
 #include "engine/chunk/Chunk.h"
 #include "engine/chunk/ChunkCoord.h"
 #include <unordered_map>
+#include <unordered_set>
 #include <shared_mutex>
 #include <vector>
 #include <memory>
@@ -35,8 +36,10 @@ public:
     const std::unordered_map<ChunkCoord, ChunkPtr>& map() const { return m_chunks; }
 
     // --- Список активных чанков (вызывающий держит подходящую блокировку) ---
-    std::vector<ChunkCoord>&       active()       { return m_activeChunks; }
-    const std::vector<ChunkCoord>& active() const { return m_activeChunks; }
+    // unordered_set вместо vector: активация/деактивация чанка — O(1) в среднем,
+    // а не линейный поиск по всему списку на каждый шаг симуляции.
+    std::unordered_set<ChunkCoord>&       active()       { return m_activeChunks; }
+    const std::unordered_set<ChunkCoord>& active() const { return m_activeChunks; }
     void addActiveIfMissing(const ChunkCoord& coord);
     void removeActive(const ChunkCoord& coord);
 
@@ -46,5 +49,5 @@ public:
 private:
     std::unordered_map<ChunkCoord, ChunkPtr> m_chunks;
     mutable std::shared_mutex                m_mutex;
-    std::vector<ChunkCoord>                  m_activeChunks;
+    std::unordered_set<ChunkCoord>           m_activeChunks;
 };
