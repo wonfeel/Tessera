@@ -7,12 +7,17 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d7?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 
-**[English](README.md)**
+**[English](README.md)** · **[Архитектурные заметки](https://wonfeel.github.io/Tessera/architecture.html)** · **[Как добавить новую демку](https://wonfeel.github.io/Tessera/new-demo.html)**
 
 2D движок клеточных автоматов на C++/CUDA/OpenGL, распространяется по [лицензии MIT](LICENSE).
 Мир разбит на чанки — симулируются только живые, жизнь сама расползается в соседние.
 Симуляция и рендер работают в отдельных потоках. Писал, чтобы разобраться с потоками,
 тред-пулом, CUDA и OpenGL на практике, а не просто почитать.
+
+> [!Note]
+> Ссылки на доки выше заработают, когда в репозитории включится GitHub Pages
+> (Settings → Pages → Deploy from a branch → `main` / `docs`). До этого — 404,
+> сами файлы уже лежат в `docs/architecture.html` и `docs/new-demo.html`.
 
 **Задача:** симулировать практически бесконечное поле, обновляя только живые области,
 параллельно на CPU/GPU и не роняя рендер.
@@ -31,6 +36,7 @@
 - [Как устроено](#как-устроено)
 - [Бенчмарк](#бенчмарк)
 - [Требования](#требования)
+- [Зависимости](#зависимости)
 - [Сборка](#сборка)
 - [Демки](#демки)
 - [Захват GIF](#захват-gif)
@@ -136,7 +142,18 @@
 - CUDA Toolkit — опционально, только для GPU-бэкенда
 - Python 3 + Pillow (`pip install pillow`) — только для `tools/capture_gif.py`
 
-GLFW / GLAD / GLM / ImGui уже лежат в `libs/`, больше ничего ставить не нужно.
+## Зависимости
+
+Уже лежат в `libs/`, больше ничего ставить не нужно:
+
+- [GLFW](https://www.glfw.org/) — окно/контекст/ввод
+- [GLAD](https://glad.dav1d.de/) — загрузка функций OpenGL
+- [GLM](https://glm.g-truc.net/) — векторная/матричная математика
+- [Dear ImGui](https://github.com/ocornut/imgui) — отладочные/интерактивные панели
+
+> [!Tip]
+> Сборка без установленной CUDA — это нормально: CMake сам её обнаруживает и
+> откатывается на CPU-only бэкенд (см. [Сборка](#сборка)).
 
 ---
 
@@ -225,6 +242,8 @@ Test_benchmark     пропускная способность CPU vs GPU
 
 ## Что ещё не сделано
 
-- CUDA-GL interop пока fallback'ается на WDDM (симуляция работает в воркер-потоках,
-  где GL-контекст недоступен).
+> [!Warning]
+> CUDA-GL interop пока fallback'ается на WDDM (симуляция работает в воркер-потоках,
+> где GL-контекст недоступен).
+
 - Только 2-состояния, тоталистические life-like правила (нет multi-state автоматов).

@@ -7,12 +7,17 @@
 ![Platform](https://img.shields.io/badge/platform-Windows-0078d7?style=flat)
 ![License](https://img.shields.io/badge/license-MIT-green?style=flat)
 
-**[Русский](README_RU.md)**
+**[Русский](README_RU.md)** · **[Architecture notes](https://wonfeel.github.io/Tessera/architecture.html)** · **[Adding a new demo](https://wonfeel.github.io/Tessera/new-demo.html)**
 
 A 2D cellular-automaton engine in C++/CUDA/OpenGL, released under the [MIT license](LICENSE).
 The world is chunked — only live chunks are simulated, gliders cross chunk boundaries correctly,
 simulation and rendering run on separate threads. Built to actually understand threads, thread
 pools, CUDA, and OpenGL — not just read about them.
+
+> [!Note]
+> The architecture/demo-authoring links above need GitHub Pages enabled for this repo
+> (Settings → Pages → Deploy from a branch → `main` / `docs`). Until then they 404 —
+> the files themselves are already in `docs/architecture.html` and `docs/new-demo.html`.
 
 **The problem:** simulate an effectively unbounded field, updating only the live regions,
 in parallel across CPU/GPU, without ever stalling the render.
@@ -30,6 +35,7 @@ CPU or a CUDA backend; give rendering its own thread so a heavy step never drops
 - [How it's put together](#how-its-put-together)
 - [Benchmark](#benchmark)
 - [Requirements](#requirements)
+- [Dependencies](#dependencies)
 - [Build](#build)
 - [Demos](#demos)
 - [Capture GIFs](#capture-gifs)
@@ -139,7 +145,18 @@ Run it yourself: `Test_benchmark <chunkSize> <iterations>`.
 - CUDA Toolkit — optional, only needed for the GPU backend
 - Python 3 + Pillow (`pip install pillow`) — only needed for `tools/capture_gif.py`
 
-GLFW / GLAD / GLM / ImGui are vendored in `libs/`, nothing else to install.
+## Dependencies
+
+Vendored in `libs/`, nothing else to install:
+
+- [GLFW](https://www.glfw.org/) — window/context/input
+- [GLAD](https://glad.dav1d.de/) — OpenGL function loading
+- [GLM](https://glm.g-truc.net/) — vector/matrix math
+- [Dear ImGui](https://github.com/ocornut/imgui) — debug/interactive UI panels
+
+> [!Tip]
+> Building without CUDA installed is fine — CMake detects it and falls back to the
+> CPU-only backend automatically (see [Build](#build)).
 
 ---
 
@@ -247,6 +264,8 @@ other side with the right shape and offset.
 
 ## What's not done yet
 
-- CUDA-GL interop still falls back to the regular copy path on WDDM (the
-  simulation runs on worker threads where the GL context isn't current).
+> [!Warning]
+> CUDA-GL interop still falls back to the regular copy path on WDDM (the
+> simulation runs on worker threads where the GL context isn't current).
+
 - Only 2-state, totalistic "life-like" rules so far (no multi-state automata).
