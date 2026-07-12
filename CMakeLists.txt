@@ -21,6 +21,23 @@ else()
                         $<$<COMPILE_LANGUAGE:C,CXX>:-Wpedantic>)
 endif()
 
+# ===== AddressSanitizer (диагностика) =====
+# Ловит порчу памяти (OOB write/read, use-after-free) в момент возникновения,
+# а не там, где она случайно проявилась крашем позже — что критично, когда
+# крах происходит в коде, который сам ничего не портит (см. springs-демку).
+# Включается явно: cmake --preset x64-debug -DFE_ENABLE_ASAN=ON
+option(FE_ENABLE_ASAN "Enable AddressSanitizer on all C/C++ targets" OFF)
+if(FE_ENABLE_ASAN)
+    if(MSVC)
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/fsanitize=address>
+                            $<$<COMPILE_LANGUAGE:C,CXX>:/Zi>)
+    else()
+        add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=address> -g)
+        add_link_options(-fsanitize=address)
+    endif()
+    message(STATUS "AddressSanitizer enabled (FE_ENABLE_ASAN=ON)")
+endif()
+
 # ===== Зависимости =====
 find_package(OpenGL REQUIRED)
 
@@ -109,7 +126,9 @@ if(FE_USE_CUDA)
         if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
             set(CMAKE_CUDA_ARCHITECTURES 86-real)
         endif()
-        set(CUDA_BACKEND_SRC "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/CudaLifeBackend.cu")
+        set(CUDA_BACKEND_SRC
+            "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/CudaLifeBackend.cu"
+            "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/CudaSpringBackend.cu")
         message(STATUS "CUDA found – GPU simulation backend enabled (arch ${CMAKE_CUDA_ARCHITECTURES})")
     else()
         message(STATUS "CUDA not found – building CPU-only simulation backend")
@@ -140,6 +159,17 @@ if(FE_CUDA_ENABLED)
     target_sources(EngineLib PRIVATE ${CUDA_BACKEND_SRC})
     target_compile_definitions(EngineLib PUBLIC FE_CUDA_ENABLED)
     target_link_libraries(EngineLib PUBLIC CUDA::cudart)
+    # cub/thrust (CCCL) — для CudaSpringBackend.cu (cub::DeviceReduce::Sum).
+    if(CUDAToolkit_INCLUDE_DIRS)
+        target_include_directories(EngineLib PRIVATE ${CUDAToolkit_INCLUDE_DIRS})
+    endif()
+    # cub требует стандартный (не "traditional") препроцессор MSVC — иначе
+    # cl.exe падает с fatal error C1189 прямо в заголовках cub. Ограничиваем
+    # флаг только этим файлом — CudaLifeBackend.cu собирается без него.
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/CudaSpringBackend.cu"
+        PROPERTIES COMPILE_OPTIONS "-Xcompiler=/Zc:preprocessor"
+    )
     # Разрешаем .cu видеть те же include-пути, что и движок (для "engine/..." путей)
     set_target_properties(EngineLib PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 endif()
