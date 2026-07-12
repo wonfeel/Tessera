@@ -4,8 +4,10 @@
 #include <chrono>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include <algorithm>
+#include <vector>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "engine/input/Input.h"
@@ -85,11 +87,44 @@ private:
         std::atomic<bool>  btn0{false}, btn1{false}, btn2{false};
     } m_imguiMouse;
 
+    // Клавиатура/текст для ImGui — в отличие от мыши (простые атомики,
+    // одно текущее значение достаточно), тут нужна очередь: несколько
+    // key-событий или символов могут прийти за один кадр рендер-потока
+    // (glfwPollEvents зовётся из update-потока), и терять их нельзя —
+    // иначе быстрый набор текста будет "проглатывать" буквы. Наполняется в
+    // keyCallback/charCallback (update/main поток), опустошается в
+    // renderLoop() перед ImGui::NewFrame() вызовом ImGui_ImplGlfw_Key/CharCallback
+    // напрямую (install_callbacks=false — GLFW не должен звать их сам).
+    struct GlfwKeyEvent { int key, scancode, action, mods; };
+    std::mutex m_imguiInputMutex;
+    std::vector<GlfwKeyEvent> m_imguiKeyEvents;
+    std::vector<unsigned int> m_imguiCharEvents;
+
     static void keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods);
+    static void charCallback(GLFWwindow* window, unsigned int codepoint);
     static void mouseButtonCallback(GLFWwindow* window, int button, int action, int mods);
     static void cursorPosCallback(GLFWwindow* window, double xpos, double ypos);
     static void scrollCallback(GLFWwindow* window, double xoffset, double yoffset);
     static void framebufferSizeCallback(GLFWwindow* window, int width, int height);
+
+    // ImGui-буфер обмена (Ctrl+C/Ctrl+V в текстовых полях) — по умолчанию
+    // ImGui_ImplGlfw ставит io.GetClipboardTextFn/SetClipboardTextFn на
+    // glfwGetClipboardString/glfwSetClipboardString напрямую, а те, как и
+    // glfwGetKey (см. keyCallback/renderLoop), обязаны звать с главного
+    // потока — вызов из ImGui-виджета на рендер-потоке валит процесс
+    // access violation'ом при вставке. Поэтому переопределяем эти функции:
+    // рендер-поток кладёт запрос и ждёт на condition_variable, update-поток
+    // (главный) обслуживает реальный glfwGet/SetClipboardString раз за
+    // итерацию updateLoop() и будит ожидающего.
+    enum class ClipboardOp { None, Get, Set };
+    std::mutex m_clipboardMutex;
+    std::condition_variable m_clipboardCv;
+    ClipboardOp m_clipboardOp = ClipboardOp::None;
+    bool m_clipboardDone = false;
+    std::string m_clipboardBuffer;
+    void serviceClipboardRequest();   // вызывать из updateLoop() на главном потоке
+    static const char* imguiGetClipboardText(void* userData);
+    static void imguiSetClipboardText(void* userData, const char* text);
 
     void updateLoop();
     void renderLoop();

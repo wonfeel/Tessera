@@ -8,6 +8,12 @@
 #  include <imgui.h>
 #  include <imgui_impl_glfw.h>
 #  include <imgui_impl_opengl3.h>
+// Внутренний хелпер бэкенда (externally-linked, но не объявлен в публичном
+// imgui_impl_glfw.h) — чистая функция без вызовов GLFW, поэтому безопасно
+// звать с любого потока. Нужен взамен ImGui_ImplGlfw_KeyCallback(), который
+// внутри дёргает glfwGetKey()/glfwGetKeyName() — а те, по документации GLFW,
+// разрешено звать только с главного потока (см. renderLoop() ниже).
+extern ImGuiKey ImGui_ImplGlfw_KeyToImGuiKey(int keycode, int scancode);
 #endif
 
 Application::Application(int width, int height, const std::string& title,
@@ -44,6 +50,7 @@ Application::Application(int width, int height, const std::string& title,
 
     glfwSetWindowUserPointer(m_window, this);
     glfwSetKeyCallback(m_window, keyCallback);
+    glfwSetCharCallback(m_window, charCallback);
     glfwSetMouseButtonCallback(m_window, mouseButtonCallback);
     glfwSetCursorPosCallback(m_window, cursorPosCallback);
     glfwSetScrollCallback(m_window, scrollCallback);
@@ -120,6 +127,7 @@ void Application::updateLoop() {
         m_lastFrameTime = now;
 
         glfwPollEvents();
+        serviceClipboardRequest();   // см. .h — glfwGet/SetClipboardString только с этого потока
 
         // Передаём изменение размера в рендер-поток (без вызова glViewport здесь)
         if (m_framebufferSizeChanged) {
@@ -178,6 +186,15 @@ void Application::renderLoop() {
         // Lazy init — GL context is current here in the render thread.
         if (!m_imguiReady) {
             imguiInit(m_window);
+            // ImGui_ImplGlfw_InitForOpenGL() выше уже поставил
+            // io.GetClipboardTextFn/SetClipboardTextFn на GLFW-функции
+            // напрямую — переопределяем их на потокобезопасные обёртки (см.
+            // .h): те звонят glfwGet/SetClipboardString только с главного
+            // потока через serviceClipboardRequest() в updateLoop().
+            ImGuiIO& clipIo = ImGui::GetIO();
+            clipIo.GetClipboardTextFn = &Application::imguiGetClipboardText;
+            clipIo.SetClipboardTextFn = &Application::imguiSetClipboardText;
+            clipIo.ClipboardUserData = this;
             m_imguiReady = true;
         }
 
@@ -191,6 +208,45 @@ void Application::renderLoop() {
         io.MouseDown[2] = m_imguiMouse.btn2.load();
         io.MouseWheel   = m_imguiMouse.scroll.exchange(0.f);
         io.DeltaTime    = 1.f / 60.f;
+
+        // Клавиатура/текст — раньше вообще не доходили до ImGui (только
+        // мышь прокидывалась вручную), поэтому Ctrl+клик по слайдеру для
+        // ввода точного числа не работал: ImGui не получал ни одного
+        // key-события. install_callbacks=false не даёт GLFW самому звать
+        // ImGui_ImplGlfw_Key/CharCallback, поэтому зовём их сами — тут, на
+        // рендер-потоке, из очереди, накопленной в keyCallback/charCallback
+        // на update-потоке. ВАЖНО: не вызываем ImGui_ImplGlfw_KeyCallback()
+        // напрямую — она внутри читает модификаторы через glfwGetKey() и
+        // (для нераспознанных клавиш) glfwGetKeyName(), а обе эти функции
+        // GLFW разрешает звать только с главного потока (которым тут
+        // является update-поток, не рендер-поток) — вызов с чужого потока
+        // и был настоящей причиной, почему Ctrl не распознавался стабильно.
+        // Вместо этого берём mods прямо из события — оно захвачено в
+        // keyCallback НА главном потоке, так что валидно и безопасно.
+        {
+            std::vector<GlfwKeyEvent> keyEvents;
+            std::vector<unsigned int> charEvents;
+            {
+                std::lock_guard<std::mutex> lock(m_imguiInputMutex);
+                keyEvents.swap(m_imguiKeyEvents);
+                charEvents.swap(m_imguiCharEvents);
+            }
+            for (const auto& e : keyEvents) {
+                if (e.action != GLFW_PRESS && e.action != GLFW_RELEASE)
+                    continue;   // GLFW_REPEAT — ImGui сама генерирует повтор по held-состоянию
+                io.AddKeyEvent(ImGuiMod_Ctrl,  (e.mods & GLFW_MOD_CONTROL) != 0);
+                io.AddKeyEvent(ImGuiMod_Shift, (e.mods & GLFW_MOD_SHIFT) != 0);
+                io.AddKeyEvent(ImGuiMod_Alt,   (e.mods & GLFW_MOD_ALT) != 0);
+                io.AddKeyEvent(ImGuiMod_Super, (e.mods & GLFW_MOD_SUPER) != 0);
+                ImGuiKey imguiKey = ImGui_ImplGlfw_KeyToImGuiKey(e.key, e.scancode);
+                io.AddKeyEvent(imguiKey, e.action == GLFW_PRESS);
+                io.SetKeyEventNativeData(imguiKey, e.key, e.scancode);
+            }
+            // CharCallback безопасна с любого потока — просто io.AddInputCharacter(c),
+            // без обращений к GLFW.
+            for (unsigned int c : charEvents)
+                ImGui_ImplGlfw_CharCallback(m_window, c);
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -258,7 +314,58 @@ void Application::updatePerformanceDisplay(int fps, int cpuPercent) {
 
 void Application::keyCallback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
-    if (app) app->m_input.setKeyState(key, action != GLFW_RELEASE);
+    if (!app) return;
+    app->m_input.setKeyState(key, action != GLFW_RELEASE);
+    std::lock_guard<std::mutex> lock(app->m_imguiInputMutex);
+    app->m_imguiKeyEvents.push_back({key, scancode, action, mods});
+}
+
+void Application::charCallback(GLFWwindow* window, unsigned int codepoint) {
+    auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
+    if (!app) return;
+    std::lock_guard<std::mutex> lock(app->m_imguiInputMutex);
+    app->m_imguiCharEvents.push_back(codepoint);
+}
+
+// См. .h — glfwGet/SetClipboardString обязаны звать с главного потока
+// (update-поток), а ImGui дёргает io.GetClipboardTextFn/SetClipboardTextFn
+// синхронно из виджетов на рендер-потоке. Кладём запрос и блокируемся,
+// пока главный поток не обслужит его в serviceClipboardRequest().
+void Application::serviceClipboardRequest() {
+    std::unique_lock<std::mutex> lock(m_clipboardMutex);
+    if (m_clipboardOp == ClipboardOp::Get) {
+        const char* text = glfwGetClipboardString(m_window);
+        m_clipboardBuffer = text ? text : "";
+    } else if (m_clipboardOp == ClipboardOp::Set) {
+        glfwSetClipboardString(m_window, m_clipboardBuffer.c_str());
+    } else {
+        return;
+    }
+    m_clipboardOp = ClipboardOp::None;
+    m_clipboardDone = true;
+    lock.unlock();
+    m_clipboardCv.notify_all();
+}
+
+const char* Application::imguiGetClipboardText(void* userData) {
+    auto* app = static_cast<Application*>(userData);
+    std::unique_lock<std::mutex> lock(app->m_clipboardMutex);
+    app->m_clipboardDone = false;
+    app->m_clipboardOp = ClipboardOp::Get;
+    app->m_clipboardCv.wait(lock, [app] { return app->m_clipboardDone; });
+    // m_clipboardBuffer остаётся валидным до следующего вызова — ImGui
+    // копирует строку сразу после возврата, как и в оригинальном
+    // glfwGetClipboardString(), возвращающем указатель на внутренний буфер.
+    return app->m_clipboardBuffer.c_str();
+}
+
+void Application::imguiSetClipboardText(void* userData, const char* text) {
+    auto* app = static_cast<Application*>(userData);
+    std::unique_lock<std::mutex> lock(app->m_clipboardMutex);
+    app->m_clipboardBuffer = text ? text : "";
+    app->m_clipboardDone = false;
+    app->m_clipboardOp = ClipboardOp::Set;
+    app->m_clipboardCv.wait(lock, [app] { return app->m_clipboardDone; });
 }
 
 void Application::mouseButtonCallback(GLFWwindow* window, int button, int action, int mods) {

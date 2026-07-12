@@ -81,20 +81,45 @@ void TaskScheduler::workerLoop() {
             task = std::move(m_queue.front());
             m_queue.pop();
         }
-        task();
+        try {
+            task();
+        } catch (...) {
+            // Задача не должна убивать рабочий поток — иначе пул навсегда
+            // остаётся на один поток меньше, и следующий parallelFor
+            // гарантированно повиснет (латч не досчитается до нуля).
+            // parallelFor() уже перехватывает исключение из body() и
+            // перевыбрасывает его на вызывающем потоке — здесь просто не
+            // даём потоку пула умереть, если исключение всё же дошло сюда.
+        }
     }
 }
 
 // ---------- Latch ----------
+// count_down() ОБЯЗАН декрементировать m_count и звать notify_all() под тем
+// же m_mtx, что wait() держит при проверке предиката — иначе возможна гонка
+// с уничтожением Latch: wait() мог бы проснуться (в т.ч. от spurious
+// wakeup — это законно для condition_variable) и увидеть m_count==0 ДО того,
+// как поток-нотификатор вообще попытается захватить m_mtx. Latch обычно живёт
+// на стеке вызывающего (см. parallelFor() в ParallelFor.h) — как только
+// wait() вернулся, этот объект начинает разрушаться (а на его месте на
+// стеке тут же может появиться СЛЕДУЮЩИЙ Latch того же вызывающего потока).
+// Опоздавший поток-нотификатор тогда лочит/разлочивает уже чужую память —
+// возможно, mutex НОВОГО Latch, которым в этот момент владеет другой поток:
+// ровно "unlock of mutex not owned by the current thread". Раньше здесь был
+// lock-free fetch_sub снаружи лока (и ранний lock-free выход в wait()) —
+// именно это открывало окно гонки; чем больше вызовов parallelFor() за
+// кадр (после chunk-системы — их стало на порядок больше), тем чаще в него
+// попадали. m_count можно было бы сделать обычным int (больше не нужен
+// atomic, раз всегда под локом), оставлен atomic<int> для минимальности
+// правки.
 TaskScheduler::Latch::Latch(int count) : m_count(count) {}
 void TaskScheduler::Latch::count_down() {
+    std::lock_guard<std::mutex> lock(m_mtx);
     if (m_count.fetch_sub(1) == 1) {
-        std::lock_guard<std::mutex> lock(m_mtx);
         m_cv.notify_all();
     }
 }
 void TaskScheduler::Latch::wait() {
-    if (m_count.load() == 0) return;
     std::unique_lock<std::mutex> lock(m_mtx);
     m_cv.wait(lock, [this] { return m_count.load() == 0; });
 }
