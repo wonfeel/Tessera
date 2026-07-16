@@ -257,10 +257,3 @@ other side with the right shape and offset.
 
 ---
 
-## What's not done yet
-
-> [!Warning]
-> CUDA-GL interop still falls back to the regular copy path on WDDM (the
-> simulation runs on worker threads where the GL context isn't current).
-
-- Only 2-state, totalistic "life-like" rules so far (no multi-state automata).
