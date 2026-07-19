@@ -4,6 +4,7 @@
 #include <ctime>
 #include <sstream>
 #include <iomanip>
+#include <filesystem>
 #ifdef TESSERA_IMGUI_ENABLED
 #  include <imgui.h>
 #  include <imgui_impl_glfw.h>
@@ -73,6 +74,26 @@ static void imguiInit(GLFWwindow* window) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr;   // don't write imgui.ini next to the exe
+
+    // ImGui встроенный шрифт (ProggyClean) - только ASCII, весь кириллический
+    // текст в панелях (demo/worm и любая другая демка с русскими подписями)
+    // рисуется квадратиками-заглушками без глифов. Segoe UI - системный шрифт
+    // Windows, кириллица есть с XP; путь проверяем сами (не полагаясь на
+    // AddFontFromFileTTF само по себе) - при отсутствующем файле оно зовёт
+    // IM_ASSERT_USER_ERROR, который в этой сборке (ConfigErrorRecoveryEnable-
+    // Assert по умолчанию true) реально роняет debug-сборку через assert(), а
+    // не просто тихо возвращает nullptr - при отсутствии файла тихо остаёмся
+    // на дефолтном шрифте вместо падения. 18px, не дефолтные 13 - Proggy
+    // (пиксельный, маленький нативный размер) и пропорциональный TTF-шрифт
+    // на одном и том же пиксельном размере визуально не эквивалентны, 18
+    // читается на типичном для этого проекта разрешении/зуме демок.
+    const char* kCyrillicFontPath = "C:\\Windows\\Fonts\\segoeui.ttf";
+    ImFont* font = nullptr;
+    if (std::filesystem::exists(kCyrillicFontPath)) {
+        font = io.Fonts->AddFontFromFileTTF(kCyrillicFontPath, 18.0f, nullptr, io.Fonts->GetGlyphRangesCyrillic());
+    }
+    if (!font) io.Fonts->AddFontDefault();
+
     ImGui::StyleColorsDark();
     // install_callbacks=false: we feed input manually to avoid calling
     // glfwSet*Callback from the render thread (GLFW limitation on some platforms).

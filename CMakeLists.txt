@@ -190,6 +190,13 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demo/life/patterns")
         COMMENT "Copying patterns"
     )
 endif()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demo/worm/data")
+    add_custom_command(TARGET copy_assets POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/demo/worm/data" "${CMAKE_BINARY_DIR}/worm_data"
+        COMMENT "Copying worm connectome data"
+    )
+endif()
 
 # Собрать одно приложение из main.cpp (+ соседние .cpp/.c в той же папке).
 function(fe_add_app MAIN_CPP TARGET_NAME)
