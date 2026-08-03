@@ -197,6 +197,19 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demo/worm/data")
         COMMENT "Copying worm connectome data"
     )
 endif()
+# ffmpeg.exe для ScreenRecorder (engine/utils/ScreenRecorder.cpp) - кладётся
+# РЯДОМ С ИСПОЛНЯЕМЫМИ ФАЙЛАМИ тем же соглашением, что worm_data/Shaders
+# (ScreenRecorder ищет его по относительному пути "ffmpeg.exe" от текущей
+# рабочей директории, см. Application::kFfmpegRelPath). Гейтится EXISTS: если
+# libs/ffmpeg/bin/ffmpeg.exe не положен (сборка с нуля без него), сборка не
+# падает - ScreenRecorder просто тихо использует GIF-бэкенд вместо видео.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/ffmpeg/bin/ffmpeg.exe")
+    add_custom_command(TARGET copy_assets POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_CURRENT_SOURCE_DIR}/libs/ffmpeg/bin/ffmpeg.exe" "${CMAKE_BINARY_DIR}/ffmpeg.exe"
+        COMMENT "Copying ffmpeg.exe for screen recording"
+    )
+endif()
 
 # Собрать одно приложение из main.cpp (+ соседние .cpp/.c в той же папке).
 function(fe_add_app MAIN_CPP TARGET_NAME)

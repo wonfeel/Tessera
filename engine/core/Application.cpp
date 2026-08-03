@@ -1,6 +1,7 @@
 // engine/core/Application.cpp
 #include "Application.h"
 #include <iostream>
+#include <cstdio>
 #include <ctime>
 #include <sstream>
 #include <iomanip>
@@ -16,6 +17,29 @@
 // разрешено звать только с главного потока (см. renderLoop() ниже).
 extern ImGuiKey ImGui_ImplGlfw_KeyToImGuiKey(int keycode, int scancode);
 #endif
+
+namespace {
+// ФИКСИРОВАННЫЙ FPS ЗАПИСИ, независимый от фактического FPS рендера.
+// Роликам для README/демонстрации плавность важнее точного соответствия
+// частоте кадров движка, а фиксированное число упрощает и ffmpeg-команду
+// (-framerate), и расчёт задержки GIF-кадра — обоим бэкендам достаточно
+// знать одно и то же целое число, а не мерить реальный FPS на лету.
+constexpr int kRecordingFps = 30;
+
+// Имя файла по времени старта записи — без него второй F9 за сессию
+// перезаписал бы первый ролик молча. recordings/ создаётся здесь же, если
+// её ещё нет: без этого ffmpeg/GifStreamBegin просто не откроют файл в
+// несуществующей папке и запись тихо не начнётся.
+std::string makeRecordingPathNoExt() {
+    std::filesystem::create_directories("recordings");
+    const auto now = std::time(nullptr);
+    std::tm tmv{};
+    localtime_s(&tmv, &now);
+    std::ostringstream oss;
+    oss << "recordings/capture_" << std::put_time(&tmv, "%Y%m%d_%H%M%S");
+    return oss.str();
+}
+} // namespace
 
 Application::Application(int width, int height, const std::string& title,
     bool showPerformance)
@@ -200,6 +224,27 @@ void Application::renderLoop() {
             cameraCopy = m_camera;
         }
 
+        // F9 обрабатывается ЗДЕСЬ, а не в keyCallback: старт/стоп записи
+        // трогает GL-состояние опосредованно (через m_screenRecorder,
+        // captureFrame которого читает бэкбуфер) и должен происходить на
+        // рендер-потоке, том же, что держит GL-контекст текущим - см.
+        // класс-комментарий ScreenRecorder про потоковость. exchange(false)
+        // одним атомарным чтением снимает и сбрасывает флаг, дребезг клавиши
+        // внутри кадра схлопывается в одно переключение.
+        if (m_toggleRecordingRequested.exchange(false)) {
+            if (m_screenRecorder.isRecording()) {
+                m_screenRecorder.stop();
+                std::cout << "[recording] stopped -> " << m_screenRecorder.lastOutputPath() << std::endl;
+            } else {
+                const std::string path = makeRecordingPathNoExt();
+                if (m_screenRecorder.start(m_width, m_height, kRecordingFps, path, kFfmpegRelPath)) {
+                    std::cout << "[recording] started -> " << m_screenRecorder.lastOutputPath() << std::endl;
+                } else {
+                    std::cerr << "[recording] failed to start (see " << path << ".ffmpeg.log if ffmpeg backend)" << std::endl;
+                }
+            }
+        }
+
         glClear(GL_COLOR_BUFFER_BIT);
         onRender(cameraCopy);
 
@@ -283,6 +328,13 @@ void Application::renderLoop() {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 #endif
 
+        // ДО свапа: читаем GL_BACK, пока в нём ещё лежит только что
+        // нарисованный (и, если включён ImGui, уже композитный) кадр - см.
+        // ScreenRecorder::captureFrame. isRecording() внутри - функция сама
+        // ничего не делает, если запись не идёт, лишний atomic-load дешевле
+        // дублирования проверки на каждом вызывающем сайте.
+        m_screenRecorder.captureFrame();
+
         glfwSwapBuffers(m_window);
 
         // FPS counting in render thread (always, not just when showPerformance).
@@ -337,6 +389,12 @@ void Application::keyCallback(GLFWwindow* window, int key, int scancode, int act
     auto* app = static_cast<Application*>(glfwGetWindowUserPointer(window));
     if (!app) return;
     app->m_input.setKeyState(key, action != GLFW_RELEASE);
+    // F9 - переключатель записи экрана (см. Application.h/renderLoop). Только
+    // GLFW_PRESS, не GLFW_REPEAT/RELEASE - удержание клавиши не должно
+    // перещёлкивать запись туда-сюда несколько раз за секунду.
+    if (key == GLFW_KEY_F9 && action == GLFW_PRESS) {
+        app->m_toggleRecordingRequested = true;
+    }
     std::lock_guard<std::mutex> lock(app->m_imguiInputMutex);
     app->m_imguiKeyEvents.push_back({key, scancode, action, mods});
 }

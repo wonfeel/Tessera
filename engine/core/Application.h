@@ -13,6 +13,7 @@
 #include "engine/input/Input.h"
 #include "engine/graphics/Camera2D.h"
 #include "engine/graphics/CameraController.h"
+#include "engine/utils/ScreenRecorder.h"
 
 class Application {
 public:
@@ -77,6 +78,14 @@ protected:
     std::atomic<int> m_fps{0};
 
     virtual void onFramebufferSizeChanged(int width, int height);
+
+    // ЗАПИСЬ ЭКРАНА - встроена в базовый класс, поэтому доступна ЛЮБОЙ демке
+    // без единой строчки кода в самой демке. Переключается клавишей F9 (см.
+    // keyCallback/renderLoop): F9 сама по себе больше нигде в движке не
+    // занята. bool-геттер и путь к последнему ролику - на случай, если
+    // конкретная демка хочет показать в своём ImGui, идёт ли запись сейчас.
+    bool isRecording() const { return m_screenRecorder.isRecording(); }
+    const std::string& lastRecordingPath() const { return m_screenRecorder.lastOutputPath(); }
 
 private:
     // Mouse state written by the update thread, read by the render thread
@@ -148,4 +157,35 @@ private:
     int m_newWidth = 0, m_newHeight = 0;
 
     bool m_imguiReady = false;
+
+    // См. isRecording()/lastRecordingPath() выше. Флаг ставится в
+    // keyCallback (главный поток, на GLFW_PRESS F9), потребляется и
+    // сбрасывается в renderLoop (рендер-поток, где только и действителен
+    // GL-контекст, нужный ScreenRecorder::captureFrame). Один атомик, а не
+    // очередь: дребезг F9 внутри одного кадра не ожидается и не страшен -
+    // exchange(false) просто съест все накопленные нажатия как одно.
+    std::atomic<bool> m_toggleRecordingRequested{false};
+    ScreenRecorder m_screenRecorder;
+    // Путь к ffmpeg.exe - ОТНОСИТЕЛЬНЫЙ, от текущей рабочей директории, тем
+    // же соглашением, что уже принято в проекте для worm_data/Shaders
+    // (WormSim грузит "worm_data/celegans_herm.connectome" точно так же
+    // относительно cwd, а не от расположения .exe). CMake копирует
+    // ffmpeg.exe в корень build-каталога рядом со всеми исполняемыми
+    // файлами (см. CMakeLists.txt, копирование гейтится наличием
+    // libs/ffmpeg/bin/ffmpeg.exe - без него просто не выполняется, и здесь
+    // ScreenRecorder тихо падает на GIF-бэкенд).
+    //
+    // ОБЯЗАТЕЛЬНЫЙ ".\\" СПЕРЕДИ - без него имя резолвится ДВАЖДЫ по-разному:
+    // fopen_s (проверка существования, ScreenRecorder::fileExists) читает
+    // относительно cwd и с голым "ffmpeg.exe" работает; а вот cmd.exe,
+    // который _popen порождает под капотом ("cmd.exe /c <строка>"), ищет
+    // ГОЛОЕ имя команды НЕ в текущей директории, а только по PATH и паре
+    // системных путей - текущая директория для НЕКВАЛИФИЦИРОВАННОГО имени
+    // команды в его поиск не входит. Без "./" это давало молчаливый отказ
+    // ровно на этом шаге: exit code 1, "'ffmpeg.exe' is not recognized as an
+    // internal or external command" - воспроизведено и проверено на этой
+    // машине. С "./" резолвится как путь, а не как имя команды, и cmd.exe
+    // ищет его в cwd, как и должен.
+    static constexpr const char* kFfmpegRelPath = ".\\ffmpeg.exe";
+    int m_recordingIndex = 0;  // счётчик для имени файла при нескольких стартах за сессию
 };

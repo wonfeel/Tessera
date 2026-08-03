@@ -84,3 +84,28 @@ bool ExportGif(ChunkedTileMap& map, const GifExportParams& p,
     GifEnd(&writer);
     return true;
 }
+
+// --- потоковый записчик произвольных RGBA-кадров, см. .h ------------------
+
+GifStream* GifStreamBegin(const std::string& path, uint32_t width, uint32_t height,
+                          uint32_t delayCs) {
+    auto* writer = new GifWriter{};
+    if (!GifBegin(writer, path.c_str(), width, height, delayCs)) {
+        delete writer;
+        return nullptr;
+    }
+    return reinterpret_cast<GifStream*>(writer);
+}
+
+void GifStreamWriteFrame(GifStream* stream, const uint8_t* rgba, uint32_t width,
+                         uint32_t height, uint32_t delayCs) {
+    if (!stream) return;
+    GifWriteFrame(reinterpret_cast<GifWriter*>(stream), rgba, width, height, delayCs);
+}
+
+void GifStreamEnd(GifStream* stream) {
+    if (!stream) return;
+    auto* writer = reinterpret_cast<GifWriter*>(stream);
+    GifEnd(writer);
+    delete writer;
+}

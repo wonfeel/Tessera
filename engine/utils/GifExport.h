@@ -1,5 +1,6 @@
 // engine/utils/GifExport.h
 #pragma once
+#include <cstdint>
 #include <string>
 #include <functional>
 
@@ -25,3 +26,23 @@ struct GifExportParams {
 // map.getTileState(). Возвращает false при неверных параметрах или ошибке файла.
 bool ExportGif(ChunkedTileMap& map, const GifExportParams& params,
                const std::function<void()>& stepFn);
+
+// ---------------------------------------------------------------------------
+// ПОТОКОВЫЙ GIF-ЗАПИСЧИК ПРОИЗВОЛЬНЫХ RGBA-КАДРОВ (для ScreenRecorder).
+//
+// Зачем это здесь, а не в ScreenRecorder.cpp: libs/gif/gif.h объявляет
+// GifBegin/GifWriteFrame/GifEnd с обычным (не static/не inline) внешним
+// связыванием — второй #include этого заголовка в другом .cpp даст
+// дублирующиеся символы при линковке EngineLib. Поэтому во всём проекте его
+// подключает РОВНО ОДИН файл — этот, и любой другой код, которому нужен GIF,
+// проходит через эту тонкую обёртку, а не через сам libs/gif/gif.h напрямую.
+//
+// GifStream — непрозрачный указатель, реальный тип (GifWriter*) скрыт в .cpp.
+struct GifStream;
+GifStream* GifStreamBegin(const std::string& path, uint32_t width, uint32_t height,
+                          uint32_t delayCs);
+// rgba — width*height*4 байт, ряды сверху вниз (как из glReadPixels после
+// программного переворота — сам переворот делает вызывающий, здесь его нет).
+void GifStreamWriteFrame(GifStream* stream, const uint8_t* rgba, uint32_t width,
+                         uint32_t height, uint32_t delayCs);
+void GifStreamEnd(GifStream* stream);

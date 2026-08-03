@@ -5,6 +5,11 @@ build/
 *.obj
 *.o
 *.exe
+# Исключение: ffmpeg.exe - вендоренный бинарник для ScreenRecorder
+# (engine/utils/ScreenRecorder.cpp), должен ехать вместе с репозиторием, а не
+# собираться из исходников - см. CMakeLists.txt (копирование гейтится его
+# наличием здесь).
+!libs/ffmpeg/bin/ffmpeg.exe
 *.lib
 *.a
 *.pdb
