@@ -5,11 +5,11 @@ build/
 *.obj
 *.o
 *.exe
-# Исключение: ffmpeg.exe - вендоренный бинарник для ScreenRecorder
-# (engine/utils/ScreenRecorder.cpp), должен ехать вместе с репозиторием, а не
-# собираться из исходников - см. CMakeLists.txt (копирование гейтится его
-# наличием здесь).
-!libs/ffmpeg/bin/ffmpeg.exe
+# ffmpeg.exe для ScreenRecorder (engine/utils/ScreenRecorder.cpp) БОЛЬШЕ НЕ
+# вендорится здесь - 97MB упирались в лимит GitHub на файл (100MB) и
+# раздували репозиторий навсегда каждым обновлением бинарника. Качается при
+# конфигурации CMake в build-каталог (TESSERA_FFMPEG_ENABLED, см.
+# CMakeLists.txt) - libs/ffmpeg/ остаётся полностью проигнорированной.
 *.lib
 *.a
 *.pdb

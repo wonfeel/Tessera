@@ -1,5 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.18)
 project(Tessera VERSION 1.0 LANGUAGES CXX C)
+enable_testing()
 
 # ===== Настройки C++ =====
 set(CMAKE_CXX_STANDARD 17)
@@ -128,7 +129,8 @@ if(FE_USE_CUDA)
         endif()
         set(CUDA_BACKEND_SRC
             "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/CudaLifeBackend.cu"
-            "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/CudaSpringBackend.cu")
+            "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/CudaSpringBackend.cu"
+            "${CMAKE_CURRENT_SOURCE_DIR}/engine/simulation/LightWaveCuda.cu")
         message(STATUS "CUDA found – GPU simulation backend enabled (arch ${CMAKE_CUDA_ARCHITECTURES})")
     else()
         message(STATUS "CUDA not found – building CPU-only simulation backend")
@@ -197,18 +199,60 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demo/worm/data")
         COMMENT "Copying worm connectome data"
     )
 endif()
-# ffmpeg.exe для ScreenRecorder (engine/utils/ScreenRecorder.cpp) - кладётся
+# ffmpeg.exe для ScreenRecorder (engine/utils/ScreenRecorder.cpp) - БОЛЬШЕ НЕ
+# вендорится в git: 97MB бинарник почти упирался в жёсткий лимит GitHub на
+# 100MB/файл (было 3MB запаса) и раздувал репозиторий каждым обновлением
+# бинарника навсегда - см. git-историю. Вместо этого качается ОДИН РАЗ в
+# CMAKE_BINARY_DIR при конфигурации (кэш переиспользуется - EXISTS-проверка
+# ниже не даёт качать заново на каждый повторный cmake configure) и кладётся
 # РЯДОМ С ИСПОЛНЯЕМЫМИ ФАЙЛАМИ тем же соглашением, что worm_data/Shaders
 # (ScreenRecorder ищет его по относительному пути "ffmpeg.exe" от текущей
-# рабочей директории, см. Application::kFfmpegRelPath). Гейтится EXISTS: если
-# libs/ffmpeg/bin/ffmpeg.exe не положен (сборка с нуля без него), сборка не
-# падает - ScreenRecorder просто тихо использует GIF-бэкенд вместо видео.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/libs/ffmpeg/bin/ffmpeg.exe")
-    add_custom_command(TARGET copy_assets POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/libs/ffmpeg/bin/ffmpeg.exe" "${CMAKE_BINARY_DIR}/ffmpeg.exe"
-        COMMENT "Copying ffmpeg.exe for screen recording"
-    )
+# рабочей директории, см. Application::kFfmpegRelPath).
+#
+# TESSERA_FFMPEG_ENABLED=OFF - совсем не качать (например, оффлайн-сборка
+# или сознательно не нужен MP4-бэкенд). Как и раньше при отсутствующем
+# бинарнике, сборка не падает в обоих случаях (OFF или неудача скачивания) -
+# ScreenRecorder просто тихо использует GIF-бэкенд вместо видео.
+option(TESSERA_FFMPEG_ENABLED "Fetch ffmpeg.exe for MP4 screen recording (ScreenRecorder); OFF = GIF-only fallback, no download" ON)
+if(TESSERA_FFMPEG_ENABLED)
+    # Директориальное свойство - применяется ко ВСЕМ таргетам в этом
+    # CMakeLists.txt независимо от порядка (EngineLib уже объявлен выше по
+    # тексту файла) - та же гарантия, что и у TESSERA_IMGUI_ENABLED. Отражает
+    # ВЫБОР пользователя (OFF = не хочет ffmpeg вовсе), а не факт наличия
+    # файла на диске - тот отдельно проверяется в рантайме (fileExists в
+    # ScreenRecorder.cpp), макрос не даёт ScreenRecorder воспользоваться
+    # случайно оставшимся от прошлой сборки ffmpeg.exe при явном OFF.
+    add_compile_definitions(TESSERA_FFMPEG_ENABLED)
+    set(TESSERA_FFMPEG_CACHE_DIR "${CMAKE_BINARY_DIR}/_deps/ffmpeg")
+    set(TESSERA_FFMPEG_CACHE_EXE "${TESSERA_FFMPEG_CACHE_DIR}/ffmpeg.exe")
+    if(NOT EXISTS "${TESSERA_FFMPEG_CACHE_EXE}")
+        set(TESSERA_FFMPEG_ZIP "${TESSERA_FFMPEG_CACHE_DIR}/ffmpeg.zip")
+        file(MAKE_DIRECTORY "${TESSERA_FFMPEG_CACHE_DIR}")
+        message(STATUS "TESSERA_FFMPEG_ENABLED=ON: downloading ffmpeg.exe (~90MB essentials build, one-time, cached in build dir)...")
+        file(DOWNLOAD "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+             "${TESSERA_FFMPEG_ZIP}" STATUS TESSERA_FFMPEG_DL_STATUS SHOW_PROGRESS
+             TIMEOUT 300 TLS_VERIFY ON)
+        list(GET TESSERA_FFMPEG_DL_STATUS 0 TESSERA_FFMPEG_DL_CODE)
+        list(GET TESSERA_FFMPEG_DL_STATUS 1 TESSERA_FFMPEG_DL_MSG)
+        if(TESSERA_FFMPEG_DL_CODE EQUAL 0)
+            file(ARCHIVE_EXTRACT INPUT "${TESSERA_FFMPEG_ZIP}" DESTINATION "${TESSERA_FFMPEG_CACHE_DIR}")
+            file(GLOB_RECURSE TESSERA_FFMPEG_FOUND "${TESSERA_FFMPEG_CACHE_DIR}/*/bin/ffmpeg.exe")
+            if(TESSERA_FFMPEG_FOUND)
+                list(GET TESSERA_FFMPEG_FOUND 0 TESSERA_FFMPEG_FOUND_ONE)
+                file(COPY "${TESSERA_FFMPEG_FOUND_ONE}" DESTINATION "${TESSERA_FFMPEG_CACHE_DIR}")
+            endif()
+        else()
+            message(WARNING "ffmpeg.exe download failed (${TESSERA_FFMPEG_DL_CODE}: ${TESSERA_FFMPEG_DL_MSG}) - ScreenRecorder will fall back to GIF backend.")
+        endif()
+        file(REMOVE "${TESSERA_FFMPEG_ZIP}")
+    endif()
+    if(EXISTS "${TESSERA_FFMPEG_CACHE_EXE}")
+        add_custom_command(TARGET copy_assets POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${TESSERA_FFMPEG_CACHE_EXE}" "${CMAKE_BINARY_DIR}/ffmpeg.exe"
+            COMMENT "Copying ffmpeg.exe for screen recording"
+        )
+    endif()
 endif()
 
 # Собрать одно приложение из main.cpp (+ соседние .cpp/.c в той же папке).
@@ -249,3 +293,18 @@ endfunction()
 # ===== Демки (игры) и тесты/бенчмарки =====
 fe_discover_apps("${CMAKE_CURRENT_SOURCE_DIR}/demo"  "Demo")
 fe_discover_apps("${CMAKE_CURRENT_SOURCE_DIR}/tests" "Test")
+
+# ===== CTest-регистрация (только настоящие, argument-free, PASS/FAIL тесты) =====
+# fe_discover_apps выше собирает ВСЕ tests/*/main.cpp как исполняемые цели,
+# включая десятки одноразовых калибровочных харнессов (свои CLI-аргументы,
+# свой формат вывода, не задуманы как pass/fail regression) - регистрировать
+# их ВСЕ в ctest бессмысленно и вводит в заблуждение (все "провалятся" без
+# нужных аргументов). Регистрируем явно только то, что реально устроено как
+# regression-тест: без аргументов, чёткий PASS/FAIL, ненулевой exit code при
+# провале. `ctest --test-dir out/build/<preset>` запускает оба одной командой.
+if(TARGET Test_worm_locomotion)
+    add_test(NAME Test_worm_locomotion COMMAND Test_worm_locomotion)
+endif()
+if(TARGET Test_worm_regression)
+    add_test(NAME Test_worm_regression COMMAND Test_worm_regression)
+endif()
