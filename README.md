@@ -9,10 +9,11 @@
 
 **[Русский](README_RU.md)** · **[Architecture notes](https://wonfeel.github.io/Tessera/architecture.html)** · **[Adding a new demo](https://wonfeel.github.io/Tessera/new-demo.html)**
 
-A 2D cellular-automaton engine in C++/CUDA/OpenGL, released under the [MIT license](LICENSE).
-The world is chunked — only live chunks are simulated, gliders cross chunk boundaries correctly,
-simulation and rendering run on separate threads. Built to actually understand threads, thread
-pools, CUDA, and OpenGL — not just read about them.
+A 2D simulation engine in C++/CUDA/OpenGL, released under the [MIT license](LICENSE).
+The world is chunked — only live chunks are simulated, simulation and rendering run on
+separate threads, and the simulation backend is swappable (CPU or CUDA) behind one
+interface. Built to actually understand threads, thread pools, CUDA, and OpenGL — not
+just read about them.
 
 **The problem:** simulate an effectively unbounded field, updating only the live regions,
 in parallel across CPU/GPU, without ever stalling the render.
@@ -24,7 +25,7 @@ CPU or a CUDA backend; give rendering its own thread so a heavy step never drops
 
 ## Contents
 
-- [Previews](#previews)
+- [Showcases](#showcases)
 - [Why I made this](#why-i-made-this)
 - [What it can do](#what-it-can-do)
 - [How it's put together](#how-its-put-together)
@@ -32,30 +33,31 @@ CPU or a CUDA backend; give rendering its own thread so a heavy step never drops
 - [Requirements](#requirements)
 - [Dependencies](#dependencies)
 - [Build](#build)
-- [Demos](#demos)
-- [Capture GIFs](#capture-gifs)
+- [Demos in this repo](#demos-in-this-repo)
 - [Tests](#tests)
 - [What's not done yet](#whats-not-done-yet)
 
 ---
 
-## Previews
+## Showcases
 
-**Gosper gun period 30:**
+Full, standalone demos built on this engine (each pulls Tessera automatically
+via CMake `FetchContent` — nothing to clone by hand):
 
-![gun + eater](assets/gun_eater.gif)
+**[HexLife](https://github.com/wonfeel/HexLife)** — Conway's Game of Life on the
+chunked field, `.rle` pattern loading, interactive drawing, GIF export.
 
-**Random 64×64 starting field — shows how life spreads into neighbouring chunks:**
+<p align="center">
+  <img src="https://raw.githubusercontent.com/wonfeel/HexLife/main/assets/gun_eater.gif" height="200" alt="Gosper gun" />
+  &nbsp;&nbsp;
+  <img src="https://raw.githubusercontent.com/wonfeel/HexLife/main/assets/random_field.gif" height="200" alt="Random field spreading across chunks" />
+</p>
 
-![random field](assets/random_field.gif)
+**[WaveLight](https://github.com/wonfeel/WaveLight)** — light as three dispersive
+wave fields (R/G/B) on a hex grid, paintable prism, phased beam tool.
 
-**Same kind of random start, recorded live from the interactive demo as it settles into stable colonies:**
-
-![field](assets/field.gif)
-
-**Capture UI — ImGui interface for configuring and launching headless GIF exports:**
-
-![capture ui](assets/interface.png)
+**[Wormy](https://github.com/wonfeel/Wormy-c302)** — a C. elegans body + real
+401-neuron connectome, driven by resistive-force-theory physics.
 
 ---
 
@@ -77,21 +79,19 @@ The questions I wanted to answer for myself:
 
 ## What it can do
 
-- The world is split into chunks — only live chunks are simulated, and life
-  spreads into neighbour chunks as it reaches their borders (gliders cross chunk
-  boundaries correctly).
+- The world is split into chunks — only live chunks are simulated, and state
+  spreads into neighbour chunks as it reaches their borders (e.g. Game-of-Life
+  gliders cross chunk boundaries correctly).
 - Simulation runs in parallel on a custom thread pool; rendering runs on its own
   thread — the picture doesn't stutter when the simulation is heavy.
-- The automaton rule is a lookup table, not hardcoded — the same rule runs on
-  CPU and CUDA without rewriting anything.
+- The simulation backend sits behind one interface (`ISimulationBackend`) — CPU
+  and CUDA are interchangeable, the rest of the engine doesn't know which it got.
 - CUDA backend uses shared-memory tiling to cut global-memory reads.
 - Tried CUDA-GL interop (writing results straight into the GL vertex buffer to
   skip the PCI-E round trip) — it falls back gracefully on Windows WDDM, where
   the GL context lives on a different thread.
-- Loads `.rle` pattern files (the standard format from conwaylife.com) and you
-  can pick any of them from the in-app panel.
-- Interactive editing: draw/erase cells, pan, zoom, pause/step, change speed, and
-  record a region of the field straight to a GIF.
+- Hex-grid rendering alongside the square-grid one, for demos that need
+  isotropic neighbors (light, worm).
 
 ---
 
@@ -118,8 +118,9 @@ CUDA are interchangeable and the rest of the engine doesn't know which one it go
 
 ## Benchmark
 
-Conway's rule, RTX 30-series, one chunk, 100 iterations. The GPU only pulls ahead
-once the field is big enough to hide the kernel-launch overhead:
+Conway's rule (via `demo/life`), RTX 30-series, one chunk, 100 iterations. The
+GPU only pulls ahead once the field is big enough to hide the kernel-launch
+overhead:
 
 | Chunk size | CPU          | CUDA           | Speedup |
 |------------|--------------|----------------|---------|
@@ -173,63 +174,18 @@ it picked:
 
 ---
 
-## Demos
+## Demos in this repo
+
+Small demos kept here for engine development and testing — the full
+interactive experience for each is in its own showcase repo (see
+[Showcases](#showcases) above):
 
 ```
-Demo_life_full      Full interactive Game of Life: draw, pan/zoom, pause/step,
-                    pick patterns, record GIFs (ImGui panel).
-Demo_life_minimal   The smallest possible setup — a randomized field, nothing else.
+Demo_life_minimal   Randomized field + Gosper gun, nothing else (HexLife has the full one).
+Demo_light          One LightField, click-to-pluck, no UI (WaveLight has the full one).
+Demo_worm           C. elegans body + connectome (Wormy has the polished build/README).
+Demo_cloth          Spring-network cloth simulation.
 ```
-
-Controls (full demo):
-
-```
-LMB        draw cells           Space      pause / resume
-RMB        erase cells          Step >     one step while paused
-MMB drag   pan                  WASD       pan with the keyboard
-Scroll     zoom to cursor       slider     simulation speed
-```
-
-The left panel also has a pattern picker (any `patterns/*.rle`), Clear / Randomize,
-and a GIF recorder (select a region, hit record).
-
----
-
-## Capture GIFs
-
-**Option 1 — GUI (`Demo_life_capture_ui`):**
-Run `Demo_life_capture_ui.exe` — an ImGui window where you pick the scene,
-set resolution, output path, and hit **Capture!**. The default output path
-is `%USERPROFILE%\Pictures\Tessera\capture.gif`.
-
-**Option 2 — command line:**
-```bash
-# gun + eater scene -> Pictures\Tessera\capture.gif
-python tools\capture_gif.py --exe out\build\x64-release\Test_capture.exe ^
-    --scene guns --stop 60 --res 600x360 --region 14 14 80 60
-
-# random field
-python tools\capture_gif.py --exe out\build\x64-release\Test_capture.exe ^
-    --scene random --stop 40 --res 320x320 --region 0 0 80 80 --out random.gif
-
-# single glider
-python tools\capture_gif.py --exe out\build\x64-release\Test_capture.exe ^
-    --scene glider --stop 60 --res 420x420 --region 0 0 35 35 --out glider.gif
-```
-
-Key flags:
-
-| Flag | What it does |
-|------|--------------|
-| `--scene` | `guns` (default), `random`, `glider` |
-| `--stop N` | how many steps to capture |
-| `--res WxH` | output resolution in pixels |
-| `--region X0 Y0 X1 Y1` | grid region to show (tile coords) |
-| `--guns GX GY` | GX×GY grid of Gosper guns (scene=guns only) |
-| `--delay ms` | ms between GIF frames |
-| `--out path` | output path (default: Pictures\Tessera\capture.gif) |
-
-Every step is captured (stride = 1 — not configurable). Requires Pillow: `pip install pillow`.
 
 ---
 
@@ -254,6 +210,9 @@ Test_benchmark     CPU vs GPU throughput
 `Test_propagation` is the one I added after finding gliders were being clipped at
 chunk borders — it stamps a glider near a boundary and checks it comes out the
 other side with the right shape and offset.
+
+`tests/light_field_*` are the equivalent regression/benchmark tests for
+`LightField` (used by the light demo).
 
 ---
 
