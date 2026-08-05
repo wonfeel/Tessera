@@ -228,10 +228,15 @@ if(TESSERA_FFMPEG_ENABLED)
     if(NOT EXISTS "${TESSERA_FFMPEG_CACHE_EXE}")
         set(TESSERA_FFMPEG_ZIP "${TESSERA_FFMPEG_CACHE_DIR}/ffmpeg.zip")
         file(MAKE_DIRECTORY "${TESSERA_FFMPEG_CACHE_DIR}")
-        message(STATUS "TESSERA_FFMPEG_ENABLED=ON: downloading ffmpeg.exe (~90MB essentials build, one-time, cached in build dir)...")
+        message(STATUS "TESSERA_FFMPEG_ENABLED=ON: downloading ffmpeg.exe (~90MB essentials build, one-time, cached in build dir - can take a while on a slow/VPN connection, ~100KB/s measured on one machine gave ~19 min)...")
+        # TIMEOUT 1800 (30 мин) - 300с оказалось МАЛО: реально замерено на
+        # этой машине ~1114с (18.5 мин) на ~100KB/s (VPN) для тех же 111MB.
+        # Качается только один раз - EXISTS-кэш выше не даёт повторных
+        # попыток при следующих cmake configure, так что щедрый timeout не
+        # стоит ничего при нормальном интернете и просто не рвёт медленный.
         file(DOWNLOAD "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
              "${TESSERA_FFMPEG_ZIP}" STATUS TESSERA_FFMPEG_DL_STATUS SHOW_PROGRESS
-             TIMEOUT 300 TLS_VERIFY ON)
+             TIMEOUT 1800 TLS_VERIFY ON)
         list(GET TESSERA_FFMPEG_DL_STATUS 0 TESSERA_FFMPEG_DL_CODE)
         list(GET TESSERA_FFMPEG_DL_STATUS 1 TESSERA_FFMPEG_DL_MSG)
         if(TESSERA_FFMPEG_DL_CODE EQUAL 0)
