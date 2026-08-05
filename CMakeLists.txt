@@ -176,6 +176,20 @@ if(FE_CUDA_ENABLED)
     set_target_properties(EngineLib PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 endif()
 
+# ===== Демки, тесты и copy_assets - ТОЛЬКО при самостоятельной сборке =====
+# Когда этот CMakeLists.txt подтягивается как FetchContent-зависимость из
+# другого репозитория (HexLife/WaveLight/Wormy - все объявляют
+# FetchContent_MakeAvailable(Tessera), который делает add_subdirectory() на
+# этот файл), CMAKE_SOURCE_DIR - это каталог ВЕРХНЕГО проекта (HexLife и
+# т.п.), а CMAKE_CURRENT_SOURCE_DIR - каталог этого файла (Tessera). Без
+# этой проверки Tessera пыталась бы сама создать copy_assets и Demo_*/Test_*
+# цели из СВОЕГО demo/ - и тут же падала с "target already exists", потому
+# что верхний проект уже создал copy_assets и одноимённые демки (например,
+# оба репозитория объявляют demo/worm -> Demo_worm). Только объявление
+# EngineLib нужно потребителям; свои демки/тесты Tessera собирает лишь
+# тогда, когда её саму открыли и собирают напрямую.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+
 # ===== Копирование ассетов (один раз, чтобы цели не гонялись за одну папку) =====
 # Раньше каждый exe копировал Shaders/patterns в общий build-каталог в своём
 # POST_BUILD — при параллельной сборке шаги гонялись и иногда падали. Теперь одна
@@ -331,3 +345,5 @@ endif()
 if(TARGET Test_worm_regression)
     add_test(NAME Test_worm_regression COMMAND Test_worm_regression)
 endif()
+
+endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
