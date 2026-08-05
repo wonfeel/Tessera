@@ -202,19 +202,37 @@ endif()
 # ffmpeg.exe для ScreenRecorder (engine/utils/ScreenRecorder.cpp) - БОЛЬШЕ НЕ
 # вендорится в git: 97MB бинарник почти упирался в жёсткий лимит GitHub на
 # 100MB/файл (было 3MB запаса) и раздувал репозиторий каждым обновлением
-# бинарника навсегда - см. git-историю. Вместо этого качается ОДИН РАЗ в
-# CMAKE_BINARY_DIR при конфигурации (кэш переиспользуется - EXISTS-проверка
-# ниже не даёт качать заново на каждый повторный cmake configure) и кладётся
-# РЯДОМ С ИСПОЛНЯЕМЫМИ ФАЙЛАМИ тем же соглашением, что worm_data/Shaders
-# (ScreenRecorder ищет его по относительному пути "ffmpeg.exe" от текущей
-# рабочей директории, см. Application::kFfmpegRelPath).
+# бинарника навсегда - см. git-историю (полностью вычищен из истории).
+# ЛОКАЛЬНО-ПЕРВЫЙ поиск: libs/ffmpeg/bin/ffmpeg.exe (по-прежнему в
+# .gitignore, класть туда руками, никогда не коммитить) проверяется РАНЬШЕ
+# скачивания - на медленном/VPN-соединении (см. TIMEOUT ниже - до 30 минут
+# на ~100KB/s замерено на одной машине) один раз положить файл в libs/ffmpeg
+# и никогда больше не ждать повторной загрузки при чистой пересборке
+# (out/build чистится чаще, чем libs/). Если файла там нет - качается ОДИН
+# РАЗ в CMAKE_BINARY_DIR (EXISTS-кэш не даёт повторных загрузок на каждый
+# cmake configure). В обоих случаях кладётся РЯДОМ С ИСПОЛНЯЕМЫМИ ФАЙЛАМИ тем
+# же соглашением, что worm_data/Shaders (ScreenRecorder ищет его по
+# относительному пути "ffmpeg.exe" от текущей рабочей директории, см.
+# Application::kFfmpegRelPath).
 #
 # TESSERA_FFMPEG_ENABLED=OFF - совсем не качать (например, оффлайн-сборка
-# или сознательно не нужен MP4-бэкенд). Как и раньше при отсутствующем
-# бинарнике, сборка не падает в обоих случаях (OFF или неудача скачивания) -
-# ScreenRecorder просто тихо использует GIF-бэкенд вместо видео.
-option(TESSERA_FFMPEG_ENABLED "Fetch ffmpeg.exe for MP4 screen recording (ScreenRecorder); OFF = GIF-only fallback, no download" ON)
-if(TESSERA_FFMPEG_ENABLED)
+# или сознательно не нужен MP4-бэкенд); локальный libs/ffmpeg по-прежнему
+# используется, если лежит - OFF выключает только СКАЧИВАНИЕ, не отменяет
+# уже найденный локальный файл. Как и раньше, сборка не падает ни при
+# отсутствующем бинарнике, ни при неудаче скачивания - ScreenRecorder просто
+# тихо использует GIF-бэкенд вместо видео.
+option(TESSERA_FFMPEG_ENABLED "Fetch ffmpeg.exe for MP4 screen recording if not found locally (ScreenRecorder); OFF = don't download (local libs/ffmpeg still used if present), otherwise GIF-only fallback" ON)
+set(TESSERA_FFMPEG_LOCAL_EXE "${CMAKE_CURRENT_SOURCE_DIR}/libs/ffmpeg/bin/ffmpeg.exe")
+if(EXISTS "${TESSERA_FFMPEG_LOCAL_EXE}")
+    message(STATUS "ffmpeg.exe found locally at libs/ffmpeg/bin/ - skipping download entirely")
+    add_compile_definitions(TESSERA_FFMPEG_ENABLED)
+    set(TESSERA_FFMPEG_CACHE_EXE "${TESSERA_FFMPEG_LOCAL_EXE}")
+    add_custom_command(TARGET copy_assets POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${TESSERA_FFMPEG_CACHE_EXE}" "${CMAKE_BINARY_DIR}/ffmpeg.exe"
+        COMMENT "Copying ffmpeg.exe for screen recording (local libs/ffmpeg)"
+    )
+elseif(TESSERA_FFMPEG_ENABLED)
     # Директориальное свойство - применяется ко ВСЕМ таргетам в этом
     # CMakeLists.txt независимо от порядка (EngineLib уже объявлен выше по
     # тексту файла) - та же гарантия, что и у TESSERA_IMGUI_ENABLED. Отражает
