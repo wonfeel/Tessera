@@ -59,7 +59,15 @@ bool ScreenRecorder::start(int width, int height, int fps,
     m_fps = fps;
     m_droppedFrames = 0;
 
+    // TESSERA_FFMPEG_ENABLED=OFF (CMake option, см. CMakeLists.txt) - не
+    // трогаем ffmpeg вовсе, даже если ffmpeg.exe случайно оказался рядом
+    // (например, остался от предыдущей сборки с другими опциями) - выбор
+    // сборки должен быть детерминированным, не зависеть от мусора на диске.
+#ifdef TESSERA_FFMPEG_ENABLED
     const bool haveFfmpeg = fileExists(ffmpegPath);
+#else
+    const bool haveFfmpeg = false;
+#endif
     m_backend = haveFfmpeg ? Backend::Ffmpeg : Backend::Gif;
     m_outPath = outPathNoExt + (haveFfmpeg ? ".mp4" : ".gif");
 
