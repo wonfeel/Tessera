@@ -34,9 +34,13 @@ Network::Network(std::vector<NeuronType> types, std::vector<NeuronParams> params
     peptide_current_scratch_.assign(n, 0.0f);
     peptide_release_.assign(n, 0.0f);
     next_peptide_release_.assign(n, 0.0f);
+    is_motor_neuron_.assign(n, 0);
+    muscle_calcium_.assign(n, 0.0f);
+    next_muscle_calcium_.assign(n, 0.0f);
 }
 
 void Network::set_input(NeuronId id, float value) { external_input_[id] = value; }
+void Network::add_input(NeuronId id, float value) { external_input_[id] += value; }
 
 void Network::step(float dt) {
     const NeuronId n = size();
@@ -139,8 +143,20 @@ void Network::step(float dt) {
                 // both sides up together, not tested here.
                 const NeuronParams& p = params_[i];
                 const bool is_output = types_[i] == NeuronType::Output;
-                const float leak = is_output ? 0.0f : p.leak * leak_scale_;
-                const float drive = is_output ? 0.0f : external_input_[i];
+                // Мышцы (Output) больше не архитектурно заперты на leak=0 -
+                // см. set_muscle_leak/класс-комментарий выше. muscle_leak_
+                // scale_=0 (дефолт) даёт leak=0 побитово, как и раньше;
+                // ненулевое значение - предмет tests/worm_muscle_body_joint_
+                // calibration, а НЕ обычной leak_scale_ (та изолирована от
+                // Output намеренно, см. set_muscle_leak).
+                // motorMult - см. set_motor_leak_targets/set_motor_leak_scale:
+                // дефолт 1.0 (is_motor_neuron_ всё ещё все 0, если сеттер ни
+                // разу не вызывался) даёт leak_scale_*p.leak побитово как
+                // раньше - ничего не меняется, пока WormSim явно не задаст
+                // список моторных ID и/или ненулевое отклонение от 1.0.
+                const float motorMult = (!is_output && is_motor_neuron_[i]) ? motor_leak_scale_ : 1.0f;
+                const float leak = is_output ? (p.leak * muscle_leak_scale_) : (p.leak * leak_scale_ * motorMult);
+                const float drive = is_output ? 0.0f : external_input_[i];  // мышцы по-прежнему без прямого сенсорного входа
                 const float k = (leak + gap_gain_ * gap_row_sums_[i]) / p.capacitance;
                 const float f = (leak * p.rest + chem_current + gap_neighbor_current + drive + active_current_scratch_[i]
                                   + peptide_gain_ * peptide_current_scratch_[i]) / p.capacitance;
@@ -155,6 +171,28 @@ void Network::step(float dt) {
                 break;
             }
         }
+    }
+
+    // Мышечная кальциевая переменная - см. set_muscle_calcium_tau/
+    // muscle_output в network.hpp. Считается ОТ next_state_ (V этого шага,
+    // уже вычислен выше), не от старого state_ - в отличие от active_w_/
+    // peptide_release_ (те читают ПРЕД-шаговую активацию, чтобы не создавать
+    // цикл зависимости внутри ОДНОГО шага - active_current_scratch_/
+    // peptide_current_scratch_ сами являются ВХОДОМ в next_state_ выше).
+    // Ca - чисто НИЗХОДЯЩИЙ потребитель V (WormSim читает muscle_output()
+    // уже ПОСЛЕ net.step() целиком), никогда не входит в вычисление V ни в
+    // этом, ни в следующем шаге - значит нет риска порядка, и физически
+    // корректнее гнаться за уже готовым V этого шага, а не за V шагом раньше.
+    // Пропускается целиком при tau<=0 (дефолт) - muscle_output() в этом
+    // случае не читает массив вообще, так что оставлять его нулевым безопасно
+    // и дешевле, чем гонять цикл впустую.
+    if (muscle_calcium_tau_ > 1e-6f) {
+        const float alpha_ca = std::clamp(dt / muscle_calcium_tau_, 0.0f, 1.0f);
+        for (NeuronId i = 0; i < n; ++i) {
+            if (types_[i] != NeuronType::Output) continue;
+            next_muscle_calcium_[i] = muscle_calcium_[i] + (next_state_[i] - muscle_calcium_[i]) * alpha_ca;
+        }
+        muscle_calcium_.swap(next_muscle_calcium_);
     }
 
     state_.swap(next_state_);

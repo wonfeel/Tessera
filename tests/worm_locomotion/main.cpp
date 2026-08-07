@@ -266,6 +266,8 @@ int main() {
     bool anyNaN = false;
     bool outOfBounds = false;
     float minCoiledRatio = 1e9f;
+    long coiledSteps = 0, coiledSamples = 0;  // см. гейт "свернулся в узел" ниже
+    float maxCoiledRatio = -1e9f;
     WormSim::Snapshot snap;
 
     constexpr int kSteps = 3000;
@@ -297,7 +299,11 @@ int main() {
             }
             const float diag = std::sqrt((bx1 - bx0) * (bx1 - bx0) + (by1 - by0) * (by1 - by0));
             constexpr float kArcLen = 576.0f;
-            minCoiledRatio = std::min(minCoiledRatio, diag / kArcLen);
+            const float coiledRatio = diag / kArcLen;
+            minCoiledRatio = std::min(minCoiledRatio, coiledRatio);
+            maxCoiledRatio = std::max(maxCoiledRatio, coiledRatio);
+            coiledSteps += (coiledRatio < 0.35f) ? 1 : 0;
+            coiledSamples++;
         }
 
         const float heading = std::atan2(snap.pointsY[1] - y, snap.pointsX[1] - x);
@@ -319,6 +325,10 @@ int main() {
     std::printf("position range: x=[%.1f,%.1f] y=[%.1f,%.1f]\n", minX, maxX, minY, maxY);
     std::printf("max |heading delta| in one step: %.4f rad\n", maxAbsStepDelta);
     std::printf("min coiled ratio (bbox diag / arc length, post-transient): %.3f\n", minCoiledRatio);
+    std::printf("max coiled ratio (post-transient): %.3f\n", maxCoiledRatio);
+    const float coiledFraction =
+        coiledSamples > 0 ? static_cast<float>(coiledSteps) / static_cast<float>(coiledSamples) : 0.0f;
+    std::printf("coiled fraction (steps below 0.35): %.1f%%\n", 100.0f * coiledFraction);
     std::printf("food total: initial=%.1f final=%.1f\n", initialFood, sim.totalFood());
 
     bool ok = true;
@@ -326,7 +336,47 @@ int main() {
     if (outOfBounds) { std::printf("FAIL: some point of the body left the bounds\n"); ok = false; }
     if (maxAbsStepDelta > 3.2f) { std::printf("FAIL: single-step heading change is physically implausible\n"); ok = false; }
     if (roamedX < 1.0f && roamedY < 1.0f) { std::printf("FAIL: worm never moved at all\n"); ok = false; }
-    if (minCoiledRatio < 0.35f) { std::printf("FAIL: body coiled into a tight knot\n"); ok = false; }
+    // ГЕЙТ "СВЕРНУЛСЯ В УЗЕЛ" - ПО ДЛИТЕЛЬНОСТИ, А НЕ ПО МГНОВЕННОМУ МИНИМУМУ.
+    //
+    // Failure mode, который он ловит, всегда был один: тело сматывается и
+    // ОСТАЁТСЯ смотанным (ratio уходит к нулю и не возвращается). Мгновенный
+    // минимум был для этого годной мерой ровно до тех пор, пока в модели не
+    // существовало ни одного законного глубокого изгиба.
+    //
+    // Теперь существует: омега-поворот (WormSim::updateLocomotionState,
+    // Gray, Hill & Bargmann 2005) - это буквально сворачивание тела, голова
+    // достаёт до хвоста, и он ОБЯЗАН давать низкое мгновенное значение. Он
+    // занимает ~6% времени (измерено режимом pirouette), после чего тело
+    // распрямляется само.
+    //
+    // Поэтому проверяются две разные вещи:
+    //   - доля времени в свёрнутом состоянии: 20% - заведомо выше собственной
+    //     скважности механизма (~6%) и заведомо ниже "смотался и остался"
+    //     (там доля стремится к 100%);
+    //   - жёсткий пол на настоящий узел, который не проходит ни один
+    //     законный изгиб: 24 сустава по 1.2 рад (аварийный предел в body.cpp)
+    //     дают замкнутую петлю, а её bbox-диагональ - около 0.30 длины дуги,
+    //     так что 0.15 остаётся вдвое ниже самого крутого физически
+    //     достижимого изгиба.
+    if (coiledFraction > 0.20f) {
+        std::printf("FAIL: body stays coiled (%.1f%% of steps below 0.35)\n", 100.0f * coiledFraction);
+        ok = false;
+    }
+    if (minCoiledRatio < 0.15f) { std::printf("FAIL: body coiled into a tight knot\n"); ok = false; }
+    // ДОБАВЛЕНО (см. WORM_V2_RESULTS.md раздел 2 и 11 пункт 10): этот гейт
+    // ловил "смотано в узел" (ratio->0), но пропускал противоположный
+    // failure mode - тело идеально ПРЯМОЕ и НИКОГДА не гнётся (ratio
+    // застревает ровно на 1.000 всю дорогу, bbox-диагональ == длине дуги).
+    // Живой случай: bodyGain=2.0 на новой (leak=50) мышечной динамике - roam
+    // технически проходил порог roamedX/Y<1.0 (одна ось едва вышла за 1
+    // unit), min coiled ratio=1.000 не меньше 0.35, ни один старый гейт не
+    // ловил - тело было буквально заморожено. Настоящий сигнал - не
+    // абсолютное значение ratio, а то, что оно вообще НЕ МЕНЯЕТСЯ (никакой
+    // волны/дыхания формы) за весь прогон.
+    if (maxCoiledRatio - minCoiledRatio < 0.02f) {
+        std::printf("FAIL: body shape never changes (frozen straight, no bending wave)\n");
+        ok = false;
+    }
     std::printf("%s\n", ok ? "PASS" : "FAIL");
     return ok ? 0 : 1;
 }
