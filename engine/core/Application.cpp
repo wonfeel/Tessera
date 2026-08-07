@@ -33,8 +33,16 @@ constexpr int kRecordingFps = 30;
 std::string makeRecordingPathNoExt() {
     std::filesystem::create_directories("recordings");
     const auto now = std::time(nullptr);
+    // Реентерабельный localtime: у MSVC он localtime_s(tm*, time_t*), у POSIX -
+    // localtime_r(time_t*, tm*), с обратным порядком аргументов. Голый
+    // std::localtime возвращает указатель на общий статический буфер и MSVC
+    // ругает его как небезопасный, поэтому берём по варианту на платформу.
     std::tm tmv{};
+#ifdef _WIN32
     localtime_s(&tmv, &now);
+#else
+    localtime_r(&now, &tmv);
+#endif
     std::ostringstream oss;
     oss << "recordings/capture_" << std::put_time(&tmv, "%Y%m%d_%H%M%S");
     return oss.str();

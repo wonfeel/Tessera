@@ -92,13 +92,24 @@ CUDA-GL interop (писать результат прямо в GL-буфер, м
 
 ## Сборка
 
-Windows, Visual Studio 2022 (MSVC), CMake 3.20+ и Ninja. Зависимости ([GLFW](https://www.glfw.org/),
+CMake 3.20+ и Ninja, под Windows или Linux. CI собирает обе на каждый пуш.
+
+**Windows** (Visual Studio 2022 / MSVC). Зависимости ([GLFW](https://www.glfw.org/),
 [GLAD](https://glad.dav1d.de/), [GLM](https://glm.g-truc.net/),
 [Dear ImGui](https://github.com/ocornut/imgui)) уже лежат в `libs/` - больше ничего ставить не нужно.
 
 ```bash
 cmake --preset x64-release
 cmake --build out/build/x64-release
+```
+
+**Linux** (GCC или Clang). Из системы берётся только GLFW - в `libs/` лежит его Windows-сборка;
+GLAD, GLM и ImGui вендорятся и используются как есть.
+
+```bash
+sudo apt install ninja-build libglfw3-dev libgl1-mesa-dev xorg-dev
+cmake --preset linux-release
+cmake --build out/build/linux-release
 ```
 
 CUDA опциональна: без неё собирается CPU-only, и CMake сам напишет, что выбрал:
@@ -128,12 +139,29 @@ Test_correctness    правило + парсер .rle, и побайтовое 
 Test_propagation    глайдер должен пересечь границу чанка целым
 Test_capture        детерминированный дамп GIF, регрессионный оракул
 Test_benchmark      пропускная способность CPU vs GPU
+Test_thread_safety  стресс тред-пула и чанк-стора, задуман под TSan
 tests/light_field_* регрессия и бенчмарки волнового поля
 ```
 
 `Test_propagation` появился, когда выяснилось, что глайдеры «обрезаются» на границе чанка - тест
 ставит глайдер у самой границы и проверяет, что он вышел с другой стороны в правильной форме и
 позиции.
+
+### Санитайзеры
+
+Гонки, которые в этом движке реально были - вставка в чанк-стор под shared-блокировкой, старт
+пула до выставления флага, потерянная побудка в shutdown - находились чтением кода, а этот способ
+перестаёт работать сразу же, как перестаёшь читать. `Test_thread_safety` воспроизводит те же
+сценарии, чтобы их проверял ThreadSanitizer. У MSVC его нет, поэтому только Linux; в CI гоняется
+на каждый пуш:
+
+```bash
+cmake --preset linux-tsan
+cmake --build out/build/linux-tsan --target Test_thread_safety
+ctest --test-dir out/build/linux-tsan -R Test_thread_safety --output-on-failure
+```
+
+AddressSanitizer работает на обеих платформах: добавить `-DFE_ENABLE_ASAN=ON` к любому пресету.
 
 ---
 

@@ -39,15 +39,60 @@ if(FE_ENABLE_ASAN)
     message(STATUS "AddressSanitizer enabled (FE_ENABLE_ASAN=ON)")
 endif()
 
+# ===== ThreadSanitizer (диагностика гонок) =====
+# Ловит гонки по данным - два потока обращаются к одному адресу, хотя бы один
+# пишет, и между обращениями нет отношения happens-before. Это ровно тот класс
+# ошибок, который тут уже находился глазами и стоил отдельных правок: вставка
+# в ChunkStore под shared-блокировкой, чтение тайлов без блокировки чанка,
+# старт тред-пула до выставления m_running. Глазами такое ловится один раз и
+# потом снова заводится незаметно, поэтому есть цель Test_thread_safety,
+# которая под TSan гоняет эти же сценарии (см. tests/thread_safety/).
+#
+# MSVC TSan не поддерживает - только GCC/Clang, то есть Linux-сборка. Это одна
+# из причин, по которой Linux в CI вообще появился.
+# Включается явно: cmake --preset linux-tsan
+#
+# ASan и TSan взаимоисключающи (оба перехватывают одни и те же аллокации и
+# просто падают при линковке вместе) - проверяем это здесь, чтобы ошибка была
+# понятной, а не в виде простыни от линкера.
+option(FE_ENABLE_TSAN "Enable ThreadSanitizer on all C/C++ targets (GCC/Clang only)" OFF)
+if(FE_ENABLE_TSAN)
+    if(FE_ENABLE_ASAN)
+        message(FATAL_ERROR "FE_ENABLE_ASAN and FE_ENABLE_TSAN cannot be enabled together")
+    endif()
+    if(MSVC)
+        message(FATAL_ERROR "FE_ENABLE_TSAN requires GCC or Clang - MSVC has no ThreadSanitizer")
+    endif()
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:-fsanitize=thread> -g -O1)
+    add_link_options(-fsanitize=thread)
+    message(STATUS "ThreadSanitizer enabled (FE_ENABLE_TSAN=ON)")
+endif()
+
 # ===== Зависимости =====
 find_package(OpenGL REQUIRED)
+# std::thread на GNU/Linux требует явной линковки с pthread - без Threads::Threads
+# сборка проходит, а программа падает на std::system_error при первом же
+# создании потока. На Windows это no-op.
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
 
 # Пути к библиотекам
 set(LIBS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/libs")
 
 # --- GLFW ---
+# На Linux GLFW ставится пакетом (libglfw3-dev) и приносит с собой
+# CMake-конфиг, экспортирующий импортируемую цель `glfw` - у неё уже
+# прописаны и include-пути, и транзитивные зависимости (X11/Wayland). Именно
+# её и надо линковать: переменные glfw3_LIBRARIES/glfw3_INCLUDE_DIR у
+# config-пакета обычно ПУСТЫЕ, и прежний код молча собирал команду линковки
+# без самой библиотеки. В libs/ лежит только Windows-сборка, поэтому
+# ручной поиск ниже - фолбэк для Windows.
 find_package(glfw3 QUIET)
-if(NOT glfw3_FOUND)
+if(TARGET glfw)
+    set(GLFW_LIB glfw)
+    set(GLFW_INCLUDE_DIR "")
+    message(STATUS "GLFW found as imported target `glfw` (system package)")
+elseif(NOT glfw3_FOUND)
     set(GLFW_ROOT "${LIBS_DIR}/glfw")
     find_path(GLFW_INCLUDE_DIR
         NAMES GLFW/glfw3.h
@@ -154,7 +199,9 @@ target_include_directories(EngineLib PUBLIC
 if(IMGUI_AVAILABLE)
     target_include_directories(EngineLib PUBLIC ${IMGUI_DIR})
 endif()
-target_link_libraries(EngineLib PUBLIC OpenGL::GL ${GLFW_LIB})
+# ${CMAKE_DL_LIBS} - это -ldl на Linux и пусто на Windows. Нужен GLAD: загрузчик
+# достаёт адреса GL-функций через dlopen/dlsym.
+target_link_libraries(EngineLib PUBLIC OpenGL::GL ${GLFW_LIB} Threads::Threads ${CMAKE_DL_LIBS})
 
 # --- Подключение CUDA-бэкенда к движку ---
 if(FE_CUDA_ENABLED)
@@ -230,7 +277,14 @@ endif()
 # тихо использует GIF-бэкенд вместо видео.
 option(TESSERA_FFMPEG_ENABLED "Fetch ffmpeg.exe for MP4 screen recording if not found locally (ScreenRecorder); OFF = don't download (local libs/ffmpeg still used if present), otherwise GIF-only fallback" ON)
 set(TESSERA_FFMPEG_LOCAL_EXE "${CMAKE_CURRENT_SOURCE_DIR}/libs/ffmpeg/bin/ffmpeg.exe")
-if(EXISTS "${TESSERA_FFMPEG_LOCAL_EXE}")
+# Весь блок - про Windows-бинарник ffmpeg.exe (и качается zip с win64-сборкой).
+# На Linux ffmpeg ставится пакетным менеджером и лежит в PATH, тащить его в
+# build-каталог незачем; но kFfmpegRelPath - это "./ffmpeg" рядом с exe, а не
+# поиск по PATH, поэтому TESSERA_FFMPEG_ENABLED там сознательно НЕ
+# определяется и ScreenRecorder работает через GIF-бэкенд.
+if(NOT WIN32)
+    message(STATUS "Not Windows - skipping ffmpeg.exe fetch; ScreenRecorder uses the GIF backend")
+elseif(EXISTS "${TESSERA_FFMPEG_LOCAL_EXE}")
     message(STATUS "ffmpeg.exe found locally at libs/ffmpeg/bin/ - skipping download entirely")
     add_compile_definitions(TESSERA_FFMPEG_ENABLED)
     set(TESSERA_FFMPEG_CACHE_EXE "${TESSERA_FFMPEG_LOCAL_EXE}")
@@ -341,6 +395,16 @@ if(TARGET Test_correctness)
 endif()
 if(TARGET Test_light_field_wave)
     add_test(NAME Test_light_field_wave COMMAND Test_light_field_wave)
+endif()
+if(TARGET Test_thread_safety)
+    add_test(NAME Test_thread_safety COMMAND Test_thread_safety)
+    # halt_on_error - чтобы первая же гонка стала ненулевым кодом возврата:
+    # по умолчанию TSan печатает WARNING и продолжает, и тогда тест "проходит"
+    # с гонкой в логе. second_deadlock_stack даёт второй стек в отчёте о
+    # порядке взятия блокировок - без него причина видна только наполовину.
+    # Переменная безвредна, когда собрано без TSan: её просто никто не читает.
+    set_tests_properties(Test_thread_safety PROPERTIES
+        ENVIRONMENT "TSAN_OPTIONS=halt_on_error=1:second_deadlock_stack=1")
 endif()
 
 endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR

@@ -7,7 +7,7 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
 
     steps:
@@ -47,3 +47,68 @@ jobs:
       # Test_propagation требует GL-контекст (скрытое окно GLFW). У раннеров
       # GitHub нет ни GPU, ни дисплея - собирается (шагом выше), но не
       # запускается; гонять локально.
+
+  # Вторая платформа нужна не "для галочки": MSVC и GCC расходятся ровно там,
+  # где легко написать непортируемо и не заметить - CRT-функции с суффиксом _s,
+  # порядок инициализации членов, неявные include'ы, отсутствие -lpthread. Всё
+  # это тут уже находилось и правилось. Матрица gcc/clang - потому что и они
+  # предупреждают о разном.
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      # GLFW ставим системным пакетом: в libs/ лежит только Windows-сборка
+      # (.lib), и подхватывается она через find_package -> импортируемую цель
+      # `glfw`. xorg-dev тянет заголовки X11, без которых libglfw3-dev не
+      # линкуется. GLM/GLAD/ImGui вендорятся и ставить их не нужно.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libglfw3-dev libgl1-mesa-dev xorg-dev
+
+      - name: Configure (${{ matrix.compiler }}, CPU-only)
+        env:
+          CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
+          CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+        run: cmake --preset linux-release -DFE_USE_CUDA=OFF
+
+      - name: Build everything
+        run: cmake --build out/build/linux-release
+
+      # Здесь, в отличие от Windows-джобы, гоняем весь ctest: обе
+      # зарегистрированные проверки headless, GL-контекст им не нужен.
+      - name: Run ctest
+        run: ctest --test-dir out/build/linux-release --output-on-failure
+
+  # ThreadSanitizer - единственная причина, по которой Linux-сборка вообще
+  # обязана быть: у MSVC его нет, а гонки в этом проекте реальны (тред-пул +
+  # чанковый стор, см. tests/thread_safety/main.cpp). Отдельной джобой, потому
+  # что TSan замедляет код в 5-15 раз и требует своей сборки целиком.
+  tsan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libglfw3-dev libgl1-mesa-dev xorg-dev
+
+      - name: Configure with ThreadSanitizer
+        run: cmake --preset linux-tsan
+
+      # Только целевой тест: собирать под TSan всё дерево незачем, гонки ищутся
+      # в движке, а демкам для этого нужен дисплей, которого на раннере нет.
+      - name: Build Test_thread_safety
+        run: cmake --build out/build/linux-tsan --target Test_thread_safety
+
+      # TSAN_OPTIONS выставляет сам ctest (см. set_tests_properties в
+      # CMakeLists.txt), в том числе halt_on_error=1 - иначе найденная гонка
+      # осталась бы просто строчкой в логе, а джоба - зелёной.
+      - name: Run Test_thread_safety under TSan
+        run: ctest --test-dir out/build/linux-tsan -R Test_thread_safety --output-on-failure

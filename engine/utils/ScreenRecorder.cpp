@@ -8,6 +8,16 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <system_error>
+
+// POSIX называет эти функции popen/pclose, MSVC - _popen/_pclose (голые имена
+// в его CRT объявлены deprecated). Один алиас здесь вместо #ifdef в каждой
+// точке вызова.
+#ifndef _WIN32
+#  define _popen  popen
+#  define _pclose pclose
+#endif
 
 namespace {
 // GL_RGBA + GL_UNSIGNED_BYTE = 4 байта на пиксель - формат общий для обоих
@@ -31,12 +41,14 @@ void flipRowsInPlace(std::vector<uint8_t>& buf, int width, int height) {
 }
 
 bool fileExists(const std::string& path) {
+    // std::filesystem, а не fopen/fopen_s: голый fopen MSVC ругает как
+    // небезопасный, а fopen_s есть только у него - на GCC/Clang такого имени
+    // нет. Заодно is_regular_file честнее прежней проверки "открылось ли":
+    // каталог с именем ffmpeg.exe тоже не откроется на чтение, но и запускать
+    // его нечего. ec-перегрузка - чтобы не кидать исключение на кривом пути.
     if (path.empty()) return false;
-    FILE* f = nullptr;
-    fopen_s(&f, path.c_str(), "rb");  // fopen_s, не fopen - без него MSVC шумит про безопасность
-    if (!f) return false;
-    std::fclose(f);
-    return true;
+    std::error_code ec;
+    return std::filesystem::is_regular_file(path, ec);
 }
 }  // namespace
 

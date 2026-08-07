@@ -38,6 +38,44 @@
             }
         },
         {
+            "name": "linux-base",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/out/build/${presetName}",
+            "installDir": "${sourceDir}/out/install/${presetName}",
+            "condition": {
+                "type": "equals",
+                "lhs": "${hostSystemName}",
+                "rhs": "Linux"
+            }
+        },
+        {
+            "name": "linux-release",
+            "displayName": "Linux Release (GCC/Clang)",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release"
+            }
+        },
+        {
+            "name": "linux-debug",
+            "displayName": "Linux Debug (GCC/Clang)",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "linux-tsan",
+            "displayName": "Linux ThreadSanitizer",
+            "inherits": "linux-base",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "FE_ENABLE_TSAN": "ON",
+                "FE_USE_CUDA": "OFF"
+            }
+        },
+        {
             "name": "x86-debug",
             "displayName": "x86 Debug",
             "inherits": "windows-base",

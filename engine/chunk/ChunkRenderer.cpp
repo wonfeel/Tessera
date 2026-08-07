@@ -37,6 +37,12 @@ void ChunkRenderer::ensureGLReady() {
 }
 
 ChunkRenderer::~ChunkRenderer() {
+    // Ровно зеркало ensureGLReady(): если её не звали, ни одного GL-объекта нет
+    // и звать gl* нельзя. Без этой проверки headless-использование чанков
+    // (тесты без окна) падало в segfault прямо в деструкторе: GLAD не загружен,
+    // glDeleteVertexArrays - нулевой указатель на функцию, а не безобидный
+    // вызов с нулевым id.
+    if (!m_glReady) return;
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
     glDeleteBuffers(1, &EBO);

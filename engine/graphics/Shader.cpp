@@ -7,6 +7,8 @@
 #ifdef _WIN32
 #  define WIN32_LEAN_AND_MEAN
 #  include <windows.h>
+#else
+#  include <unistd.h>
 #endif
 
 Shader::Shader(const std::string& vertPath, const std::string& fragPath) {
@@ -97,17 +99,25 @@ std::string Shader::readFile(const std::string& path) {
         // Fallback: look for the file next to the executable.
         // Useful when the IDE sets CWD to the project root instead of the
         // build output folder where POST_BUILD copied the shaders.
+        std::string exeDir;
 #ifdef _WIN32
         char exePath[MAX_PATH] = {};
-        if (GetModuleFileNameA(nullptr, exePath, MAX_PATH)) {
-            std::string exeDir(exePath);
-            auto sep = exeDir.find_last_of("\\/");
-            if (sep != std::string::npos) {
-                std::string fallback = exeDir.substr(0, sep + 1) + path;
-                file.open(fallback);
-            }
-        }
+        if (GetModuleFileNameA(nullptr, exePath, MAX_PATH))
+            exeDir = exePath;
+#else
+        // Linux-эквивалент GetModuleFileNameA: ядро держит путь к текущему
+        // исполняемому файлу симлинком /proc/self/exe. readlink не дописывает
+        // '\0', поэтому длину берём из возвращаемого значения.
+        char exePath[4096] = {};
+        const ssize_t n = ::readlink("/proc/self/exe", exePath, sizeof(exePath) - 1);
+        if (n > 0)
+            exeDir.assign(exePath, static_cast<size_t>(n));
 #endif
+        if (!exeDir.empty()) {
+            auto sep = exeDir.find_last_of("\\/");
+            if (sep != std::string::npos)
+                file.open(exeDir.substr(0, sep + 1) + path);
+        }
         if (!file.is_open()) {
             std::cerr << "Failed to open shader file: " << path << std::endl;
             return "";

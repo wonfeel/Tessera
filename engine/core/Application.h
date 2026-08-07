@@ -197,6 +197,13 @@ private:
     // internal or external command" - воспроизведено и проверено на этой
     // машине. С "./" резолвится как путь, а не как имя команды, и cmd.exe
     // ищет его в cwd, как и должен.
+    // На POSIX ловушки с cmd.exe нет, но "./" нужно ровно по той же причине:
+    // /bin/sh ищет НЕКВАЛИФИЦИРОВАННОЕ имя команды только по PATH, куда
+    // текущая директория не входит. Разделитель и расширение - платформенные.
+#ifdef _WIN32
     static constexpr const char* kFfmpegRelPath = ".\\ffmpeg.exe";
+#else
+    static constexpr const char* kFfmpegRelPath = "./ffmpeg";
+#endif
     int m_recordingIndex = 0;  // счётчик для имени файла при нескольких стартах за сессию
 };

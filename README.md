@@ -94,13 +94,24 @@ Run it yourself: `Test_benchmark <chunkSize> <iterations>`.
 
 ## Build
 
-Windows, Visual Studio 2022 (MSVC), CMake 3.20+ and Ninja. Dependencies ([GLFW](https://www.glfw.org/),
+CMake 3.20+ and Ninja, on Windows or Linux. CI builds both on every push.
+
+**Windows** (Visual Studio 2022 / MSVC). Dependencies ([GLFW](https://www.glfw.org/),
 [GLAD](https://glad.dav1d.de/), [GLM](https://glm.g-truc.net/),
 [Dear ImGui](https://github.com/ocornut/imgui)) are vendored in `libs/` - nothing else to install.
 
 ```bash
 cmake --preset x64-release
 cmake --build out/build/x64-release
+```
+
+**Linux** (GCC or Clang). Only GLFW comes from the system - `libs/` ships the Windows build of it;
+GLAD, GLM and ImGui are vendored and used as-is.
+
+```bash
+sudo apt install ninja-build libglfw3-dev libgl1-mesa-dev xorg-dev
+cmake --preset linux-release
+cmake --build out/build/linux-release
 ```
 
 CUDA is optional. Without it the project builds CPU-only, and CMake prints which one it picked:
@@ -130,12 +141,29 @@ Test_correctness    rule + .rle parser, and CPU vs CUDA byte-identical after 100
 Test_propagation    a glider must cross a chunk boundary intact
 Test_capture        deterministic GIF dump, used as a regression fingerprint
 Test_benchmark      CPU vs GPU throughput
+Test_thread_safety  thread-pool + chunk-store stress, meant to run under TSan
 tests/light_field_* regression + benchmarks for the wave field
 ```
 
 `Test_propagation` is the one I added after finding gliders were being clipped at chunk borders -
 it stamps a glider near a boundary and checks it comes out the other side with the right shape
 and offset.
+
+### Sanitizers
+
+The races this engine actually had - inserting into the chunk store under a shared lock, starting
+the pool before the running flag was set, a lost wakeup in shutdown - were found by reading the
+code, which is not a method that keeps working. `Test_thread_safety` replays those scenarios so
+ThreadSanitizer can check them mechanically. MSVC has no TSan, so this is Linux-only, and CI runs
+it on every push:
+
+```bash
+cmake --preset linux-tsan
+cmake --build out/build/linux-tsan --target Test_thread_safety
+ctest --test-dir out/build/linux-tsan -R Test_thread_safety --output-on-failure
+```
+
+AddressSanitizer works on both platforms: add `-DFE_ENABLE_ASAN=ON` to any preset.
 
 ---
 
