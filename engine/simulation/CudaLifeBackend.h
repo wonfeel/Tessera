@@ -2,6 +2,7 @@
 #pragma once
 #include "engine/simulation/ISimulationBackend.h"
 #include <mutex>
+#include <atomic>
 #include <cstddef>
 
 // GPU-реализация шага автомата на CUDA.
@@ -63,5 +64,15 @@ private:
     // вызывающем потоке — если регистрация провалилась, interop отключается.
     void* m_glResource = nullptr;   // cudaGraphicsResource* — храним как void*
     unsigned int m_registeredVBO = 0;
-    bool m_interopFailed = false;   // после первой ошибки больше не пробуем
+    // atomic, а не обычный bool: simulateDirect() читает этот флаг ДО захвата
+    // m_mutex (быстрый выход на уже отключённый interop), а пишется он под
+    // локом - обычный bool дал бы неатомарное чтение параллельно с записью,
+    // то есть формальный data race (UB, ThreadSanitizer это ловит). Запись
+    // по-прежнему только под m_mutex, атомик тут нужен ровно для законности
+    // этого одного чтения снаружи лока. Порядок оставлен по умолчанию
+    // (seq_cst): флаг проверяется раз на кадр, не в горячем цикле, и
+    // выигрывать на нём ослаблением порядка нечего, а повторная проверка под
+    // локом ниже всё равно остаётся единственной, по которой принимается
+    // решение.
+    std::atomic<bool> m_interopFailed{false};   // после первой ошибки больше не пробуем
 };

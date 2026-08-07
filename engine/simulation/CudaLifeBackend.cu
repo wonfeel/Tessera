@@ -171,8 +171,21 @@ void CudaLifeBackend::simulateBatch(const std::vector<const uint8_t*>& exts, int
 
     ensureBatchBuffers(extBytes * n, outBytes * n);
     if (!m_dExtBatch || !m_dOutBatch) {
-        // Батч не влез в память — считаем как раньше, по одному чанку.
-        for (size_t i = 0; i < n; ++i) simulate(exts[i], extW, outs[i], S, rule);
+        // Батч не влез в память - считаем по одному чанку.
+        //
+        // ЗДЕСЬ НЕЛЬЗЯ ЗВАТЬ simulate(): мы уже держим m_mutex (строка выше),
+        // а simulate() лочит его же, и мьютекс нерекурсивный (см.
+        // CudaLifeBackend.h) - это был гарантированный самодедлок на первой же
+        // неудачной cudaMalloc. Путь редкий (только при нехватке device-памяти),
+        // поэтому не стрелял на глаз, но зависание было бы наглухо.
+        // Вызываем ту же связку, что и simulate() делает под локом:
+        // runKernel() + D2H - ровно как в simulateDirect() ниже, где эта же
+        // ловушка уже была обойдена.
+        for (size_t i = 0; i < n; ++i) {
+            if (runKernel(exts[i], extW, S, rule))
+                cudaOk(cudaMemcpy(outs[i], m_dOut, outBytes, cudaMemcpyDeviceToHost),
+                       "cudaMemcpy(D2H out, batch fallback)");
+        }
         return;
     }
 
