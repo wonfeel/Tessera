@@ -16,7 +16,6 @@ public:
     void initialize(size_t numThreads = 0);
     void shutdown();
     void schedule(Task task);
-    void schedule_bulk(std::vector<Task>& tasks);
 
     size_t thread_count() const { return m_threads.size(); }
 
