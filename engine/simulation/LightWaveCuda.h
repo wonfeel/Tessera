@@ -33,8 +33,21 @@ public:
     static bool isAvailable();
 
 private:
+    // Освободить все device-буферы и обнулить указатели. Нужен и деструктору,
+    // и повторному upload() - см. комментарий у m_bytesCapacity.
+    void freeBuffers();
+
     int m_cols = 0, m_rows = 0;
     float m_spacing = 0.0f;
+
+    // Размер (в байтах) уже выделенных пер-клеточных буферов. upload() раньше
+    // звал cudaMalloc безусловно, поэтому ВТОРОЙ его вызов терял все прошлые
+    // аллокации - восемь утечек device-памяти за раз, и так на каждый вызов.
+    // Соседние бэкенды (CudaLifeBackend::ensureBuffers,
+    // CudaSpringBackend::ensureNodeBuffers) используют именно capacity-паттерн;
+    // здесь теперь тот же: переаллокация только когда размер поля реально
+    // изменился, иначе буферы переиспользуются.
+    size_t m_bytesCapacity = 0;
 
     void* m_dHeight = nullptr;
     void* m_dVelocity = nullptr;

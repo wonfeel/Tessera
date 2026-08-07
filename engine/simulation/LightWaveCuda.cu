@@ -148,7 +148,7 @@ bool LightWaveCuda::isAvailable() {
 
 LightWaveCuda::LightWaveCuda() = default;
 
-LightWaveCuda::~LightWaveCuda() {
+void LightWaveCuda::freeBuffers() {
     if (m_dHeight) cudaFree(m_dHeight);
     if (m_dVelocity) cudaFree(m_dVelocity);
     if (m_dForce) cudaFree(m_dForce);
@@ -157,6 +157,13 @@ LightWaveCuda::~LightWaveCuda() {
     if (m_dAccum) cudaFree(m_dAccum);
     if (m_dSpeedBuf) cudaFree(m_dSpeedBuf);
     if (m_dSumLog) cudaFree(m_dSumLog);
+    m_dHeight = m_dVelocity = m_dForce = m_dMediumMask = nullptr;
+    m_dGlow = m_dAccum = m_dSpeedBuf = m_dSumLog = nullptr;
+    m_bytesCapacity = 0;
+}
+
+LightWaveCuda::~LightWaveCuda() {
+    freeBuffers();
 }
 
 bool LightWaveCuda::upload(int cols, int rows, float spacing,
@@ -164,14 +171,22 @@ bool LightWaveCuda::upload(int cols, int rows, float spacing,
     m_cols = cols; m_rows = rows; m_spacing = spacing;
     size_t bytes = static_cast<size_t>(cols) * rows * sizeof(float);
 
-    if (!cudaOk(cudaMalloc(&m_dHeight, bytes), "cudaMalloc(height)")) return false;
-    if (!cudaOk(cudaMalloc(&m_dVelocity, bytes), "cudaMalloc(velocity)")) return false;
-    if (!cudaOk(cudaMalloc(&m_dForce, bytes), "cudaMalloc(force)")) return false;
-    if (!cudaOk(cudaMalloc(&m_dMediumMask, bytes), "cudaMalloc(mediumMask)")) return false;
-    if (!cudaOk(cudaMalloc(&m_dGlow, bytes), "cudaMalloc(glow)")) return false;
-    if (!cudaOk(cudaMalloc(&m_dAccum, bytes), "cudaMalloc(accum)")) return false;
-    if (!cudaOk(cudaMalloc(&m_dSpeedBuf, bytes), "cudaMalloc(speedBuf)")) return false;
-    if (!cudaOk(cudaMalloc(&m_dSumLog, sizeof(float)), "cudaMalloc(sumLog)")) return false;
+    // Аллоцируем только если буферов ещё нет или поле изменило размер. Без
+    // этой проверки повторный upload() (смена размера поля, reset, второй
+    // прогон в бенчмарке) заново звал восемь cudaMalloc поверх старых
+    // указателей, теряя всю ранее выделенную device-память.
+    if (bytes != m_bytesCapacity) {
+        freeBuffers();
+        if (!cudaOk(cudaMalloc(&m_dHeight, bytes), "cudaMalloc(height)")) { freeBuffers(); return false; }
+        if (!cudaOk(cudaMalloc(&m_dVelocity, bytes), "cudaMalloc(velocity)")) { freeBuffers(); return false; }
+        if (!cudaOk(cudaMalloc(&m_dForce, bytes), "cudaMalloc(force)")) { freeBuffers(); return false; }
+        if (!cudaOk(cudaMalloc(&m_dMediumMask, bytes), "cudaMalloc(mediumMask)")) { freeBuffers(); return false; }
+        if (!cudaOk(cudaMalloc(&m_dGlow, bytes), "cudaMalloc(glow)")) { freeBuffers(); return false; }
+        if (!cudaOk(cudaMalloc(&m_dAccum, bytes), "cudaMalloc(accum)")) { freeBuffers(); return false; }
+        if (!cudaOk(cudaMalloc(&m_dSpeedBuf, bytes), "cudaMalloc(speedBuf)")) { freeBuffers(); return false; }
+        if (!cudaOk(cudaMalloc(&m_dSumLog, sizeof(float)), "cudaMalloc(sumLog)")) { freeBuffers(); return false; }
+        m_bytesCapacity = bytes;
+    }
 
     if (!cudaOk(cudaMemcpy(m_dHeight, height, bytes, cudaMemcpyHostToDevice), "H2D height")) return false;
     if (!cudaOk(cudaMemcpy(m_dVelocity, velocity, bytes, cudaMemcpyHostToDevice), "H2D velocity")) return false;
