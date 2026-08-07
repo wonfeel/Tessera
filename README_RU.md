@@ -118,7 +118,6 @@ CUDA опциональна: без неё собирается CPU-only, и CMa
 ```
 Demo_life_minimal   Случайное поле + пушка Госпера (полная версия в HexLife).
 Demo_light          Одно LightField, клик-плюк, без UI (полная версия в WaveLight).
-Demo_worm           Тело C. elegans + коннектом (у Wormy отдельные сборка/README).
 Demo_cloth          Симуляция ткани на пружинной сетке.
 ```
 

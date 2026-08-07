@@ -120,7 +120,6 @@ lives in its own showcase repo (see above):
 ```
 Demo_life_minimal   Randomized field + Gosper gun (HexLife has the full one).
 Demo_light          One LightField, click-to-pluck, no UI (WaveLight has the full one).
-Demo_worm           C. elegans body + connectome (Wormy has the polished build/README).
 Demo_cloth          Spring-network cloth simulation.
 ```
 

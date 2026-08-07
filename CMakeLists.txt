@@ -206,13 +206,6 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demo/life/patterns")
         COMMENT "Copying patterns"
     )
 endif()
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/demo/worm/data")
-    add_custom_command(TARGET copy_assets POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/demo/worm/data" "${CMAKE_BINARY_DIR}/worm_data"
-        COMMENT "Copying worm connectome data"
-    )
-endif()
 # ffmpeg.exe для ScreenRecorder (engine/utils/ScreenRecorder.cpp) - БОЛЬШЕ НЕ
 # вендорится в git: 97MB бинарник почти упирался в жёсткий лимит GitHub на
 # 100MB/файл (было 3MB запаса) и раздувал репозиторий каждым обновлением
@@ -333,17 +326,21 @@ fe_discover_apps("${CMAKE_CURRENT_SOURCE_DIR}/tests" "Test")
 
 # ===== CTest-регистрация (только настоящие, argument-free, PASS/FAIL тесты) =====
 # fe_discover_apps выше собирает ВСЕ tests/*/main.cpp как исполняемые цели,
-# включая десятки одноразовых калибровочных харнессов (свои CLI-аргументы,
-# свой формат вывода, не задуманы как pass/fail regression) - регистрировать
-# их ВСЕ в ctest бессмысленно и вводит в заблуждение (все "провалятся" без
-# нужных аргументов). Регистрируем явно только то, что реально устроено как
-# regression-тест: без аргументов, чёткий PASS/FAIL, ненулевой exit code при
-# провале. `ctest --test-dir out/build/<preset>` запускает оба одной командой.
-if(TARGET Test_worm_locomotion)
-    add_test(NAME Test_worm_locomotion COMMAND Test_worm_locomotion)
+# включая бенчмарки и профилировщики (свои CLI-аргументы, свой формат вывода,
+# не задуманы как pass/fail) - регистрировать их в ctest бессмысленно и
+# вводит в заблуждение (они "провалятся" или просто напечатают числа).
+# Регистрируем явно только то, что устроено как regression-тест: без
+# аргументов, чёткий PASS/FAIL, ненулевой exit code при провале и без нужды
+# в GL-контексте. `ctest --test-dir out/build/<preset>` запускает всё разом.
+#
+# Test_propagation сюда НЕ входит намеренно: он поднимает скрытое окно GLFW,
+# то есть требует дисплей/GPU, которых нет ни на CI-раннере, ни в headless-
+# сессии - собирается всегда, запускается руками.
+if(TARGET Test_correctness)
+    add_test(NAME Test_correctness COMMAND Test_correctness)
 endif()
-if(TARGET Test_worm_regression)
-    add_test(NAME Test_worm_regression COMMAND Test_worm_regression)
+if(TARGET Test_light_field_wave)
+    add_test(NAME Test_light_field_wave COMMAND Test_light_field_wave)
 endif()
 
 endif() # CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR
