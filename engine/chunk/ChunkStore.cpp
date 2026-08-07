@@ -13,6 +13,27 @@ ChunkStore::ChunkPtr ChunkStore::getShared(ChunkCoord coord) const {
     return (it != m_chunks.end()) ? it->second : nullptr;
 }
 
+Chunk* ChunkStore::getOrCreate(ChunkCoord coord, const Factory& factory) {
+    // Быстрый путь: чанк почти всегда уже существует - читаем под shared.
+    {
+        std::shared_lock<std::shared_mutex> lock(m_mutex);
+        auto it = m_chunks.find(coord);
+        if (it != m_chunks.end()) return it->second.get();
+    }
+    // Медленный путь: вставка - только под unique. Повторная проверка
+    // обязательна: shared уже отпущен, unique ещё не взят, и в этом окне
+    // другой поток мог создать тот же чанк. Без неё мы бы затёрли чужой
+    // (уже, возможно, кем-то используемый) чанк новым пустым.
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
+    auto it = m_chunks.find(coord);
+    if (it != m_chunks.end()) return it->second.get();
+
+    ChunkPtr chunk = factory(coord);
+    Chunk* ptr = chunk.get();
+    m_chunks[coord] = std::move(chunk);
+    return ptr;
+}
+
 Chunk* ChunkStore::getOrCreateLocked(ChunkCoord coord, const Factory& factory) {
     auto it = m_chunks.find(coord);
     if (it != m_chunks.end()) return it->second.get();
@@ -24,6 +45,11 @@ Chunk* ChunkStore::getOrCreateLocked(ChunkCoord coord, const Factory& factory) {
 }
 
 void ChunkStore::addActiveIfMissing(const ChunkCoord& coord) {
+    m_activeChunks.insert(coord);
+}
+
+void ChunkStore::markActive(const ChunkCoord& coord) {
+    std::unique_lock<std::shared_mutex> lock(m_mutex);
     m_activeChunks.insert(coord);
 }
 

@@ -27,8 +27,28 @@ public:
     Chunk*   get(ChunkCoord coord);
     ChunkPtr getShared(ChunkCoord coord) const;
 
-    // Найти или создать чанк через фабрику. Вызывающий ДОЛЖЕН уже держать
-    // mutex() (как это делал прежний getOrCreateChunk под shared-блокировкой).
+    // Найти или создать чанк через фабрику, взяв блокировку САМОСТОЯТЕЛЬНО.
+    //
+    // Это замена прежней схемы, где вызывающий брал shared_lock и звал
+    // getOrCreateLocked() под ней. Схема была сломана: getOrCreateLocked()
+    // ВСТАВЛЯЕТ в m_chunks, а shared_lock эксклюзивности не даёт - несколько
+    // потоков (UI-рисование, ensureActiveChunks) могли вставлять одновременно,
+    // и любая из вставок могла вызвать рехеш unordered_map прямо под ногами
+    // у параллельного find() из симуляции, то есть порчу памяти, а не просто
+    // устаревшее чтение. Хуже того, прежний комментарий здесь закреплял этот
+    // контракт как намеренный ("вызывающий ДОЛЖЕН держать mutex()"), из-за
+    // чего баг выглядел как решение.
+    //
+    // Внутри - обычный double-checked путь: сначала дёшево пробуем найти под
+    // shared-блокировкой (типичный случай - чанк уже есть), и только если
+    // его нет, берём unique и проверяем ПОВТОРНО, потому что между снятием
+    // shared и захватом unique чанк мог создать другой поток (std::shared_mutex
+    // не умеет атомарно повышать блокировку).
+    Chunk* getOrCreate(ChunkCoord coord, const Factory& factory);
+
+    // Вариант для вызывающего, который УЖЕ держит unique-блокировку mutex()
+    // (например, ensureActiveChunks обрабатывает пачку координат под одним
+    // локом). Именно unique, не shared: метод пишет в m_chunks.
     Chunk* getOrCreateLocked(ChunkCoord coord, const Factory& factory);
 
     // Прямой доступ к контейнеру для итерации — вызывающий сам берёт mutex().
@@ -40,8 +60,16 @@ public:
     // а не линейный поиск по всему списку на каждый шаг симуляции.
     std::unordered_set<ChunkCoord>&       active()       { return m_activeChunks; }
     const std::unordered_set<ChunkCoord>& active() const { return m_activeChunks; }
+    // Требуют, чтобы вызывающий держал unique-блокировку: обе пишут в
+    // m_activeChunks.
     void addActiveIfMissing(const ChunkCoord& coord);
     void removeActive(const ChunkCoord& coord);
+
+    // То же, но берёт unique-блокировку само - для вызывающих, которые в этот
+    // момент никакой блокировки store не держат (setTile/paintTile: они
+    // работают под mutex'ом КОНКРЕТНОГО чанка, что множество m_activeChunks
+    // никак не защищает - раньше вставка в него шла вообще без блокировки).
+    void markActive(const ChunkCoord& coord);
 
     // Удалить чанк и его запись в списке активных (вызывающий держит unique-блокировку).
     void eraseLocked(const ChunkCoord& coord);

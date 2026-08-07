@@ -15,12 +15,23 @@ ChunkedTileMap::ChunkedTileMap(int totalWidth, int totalHeight, int chunkSize, f
 {
 }
 
-Chunk* ChunkedTileMap::getOrCreateChunk(ChunkCoord coord) {
-    return m_store.getOrCreateLocked(coord, [this](ChunkCoord c) {
+ChunkStore::Factory ChunkedTileMap::chunkFactory() {
+    return [this](ChunkCoord c) {
         int cs = m_grid.chunkSize();
         glm::ivec2 worldOffset(c.x() * cs, c.y() * cs);
         return createChunk(c, worldOffset, cs, this);
-    });
+    };
+}
+
+// Блокировку берёт сам store (см. ChunkStore::getOrCreate) - вызывающий НЕ
+// должен держать mutex() store'а, иначе получит самодедлок.
+Chunk* ChunkedTileMap::getOrCreateChunk(ChunkCoord coord) {
+    return m_store.getOrCreate(coord, chunkFactory());
+}
+
+// Вариант для кода, который уже держит unique-блокировку store'а.
+Chunk* ChunkedTileMap::getOrCreateChunkLocked(ChunkCoord coord) {
+    return m_store.getOrCreateLocked(coord, chunkFactory());
 }
 
 Chunk* ChunkedTileMap::getChunk(ChunkCoord coord) {
@@ -46,38 +57,42 @@ std::shared_ptr<Chunk> ChunkedTileMap::createChunk(const ChunkCoord& coord,
 void ChunkedTileMap::setTile(int x, int y, int state) {
     CellLocation loc = m_grid.locate(x, y);
 
-    Chunk* chunk = nullptr;
+    // getOrCreateChunk сам берёт нужную блокировку store'а (и unique, если
+    // придётся вставлять) - здесь её брать нельзя.
+    Chunk* chunk = getOrCreateChunk(loc.coord);
+
+    bool becameActive = false;
     {
-        std::shared_lock<std::shared_mutex> lock(m_store.mutex());
-        chunk = getOrCreateChunk(loc.coord);
+        std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
+        chunk->simBuffer[loc.index(chunk->chunkSize)] = static_cast<uint8_t>(state);
+        chunk->dirty = true;
+        if (!chunk->active) {
+            chunk->active = true;
+            becameActive = true;
+        }
     }
-    std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
-    chunk->simBuffer[loc.index(chunk->chunkSize)] = static_cast<uint8_t>(state);
-    chunk->dirty = true;
-    if (!chunk->active) {
-        chunk->active = true;
-        m_store.addActiveIfMissing(loc.coord);
-    }
+    // markActive - вне chunkMutex и со своей unique-блокировкой store'а:
+    // m_activeChunks принадлежит store'у, и mutex конкретного чанка его не
+    // защищает (раньше вставка в это множество шла вообще без блокировки).
+    if (becameActive) m_store.markActive(loc.coord);
 }
 
 void ChunkedTileMap::setTileDirect(int x, int y, uint8_t state) {
     CellLocation loc = m_grid.locate(x, y);
 
-    Chunk* chunk = nullptr;
-    {
-        std::shared_lock<std::shared_mutex> lock(m_store.mutex());
-        chunk = getOrCreateChunk(loc.coord);
-    }
+    Chunk* chunk = getOrCreateChunk(loc.coord);
     std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
     chunk->renderBuffer[loc.index(chunk->chunkSize)] = state;
     chunk->dirty = true;
 }
 
 void ChunkedTileMap::ensureActiveChunks(const std::vector<ChunkCoord>& coords) {
+    // Здесь unique-блокировка берётся один раз на всю пачку, поэтому зовём
+    // *Locked-вариант: getOrCreateChunk() попытался бы взять её повторно.
     std::unique_lock<std::shared_mutex> lock(m_store.mutex());
     for (const ChunkCoord& coord : coords) {
         // Поле безгранично — граница мира больше не отсекает соседей.
-        Chunk* c = getOrCreateChunk(coord);
+        Chunk* c = getOrCreateChunkLocked(coord);
         if (!c->active) {
             c->active = true;
             m_store.addActiveIfMissing(coord);
@@ -95,19 +110,20 @@ void ChunkedTileMap::paintBrush(int tileX, int tileY, int size, uint8_t state) {
 void ChunkedTileMap::paintTile(int x, int y, uint8_t state) {
     CellLocation loc = m_grid.locate(x, y);
 
-    Chunk* chunk = nullptr;
+    Chunk* chunk = getOrCreateChunk(loc.coord);
+
+    bool becameActive = false;
     {
-        std::shared_lock<std::shared_mutex> lock(m_store.mutex());
-        chunk = getOrCreateChunk(loc.coord);
+        std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
+        chunk->renderBuffer[loc.index(chunk->chunkSize)] = state;
+        chunk->recalcLiveCells();   // держим liveCells в согласии с renderBuffer
+        chunk->dirty = true;
+        if (!chunk->active) {
+            chunk->active = true;
+            becameActive = true;
+        }
     }
-    std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
-    chunk->renderBuffer[loc.index(chunk->chunkSize)] = state;
-    chunk->recalcLiveCells();   // держим liveCells в согласии с renderBuffer
-    chunk->dirty = true;
-    if (!chunk->active) {
-        chunk->active = true;
-        m_store.addActiveIfMissing(loc.coord);
-    }
+    if (becameActive) m_store.markActive(loc.coord);
 }
 
 void ChunkedTileMap::applyDefaultPalette() {
@@ -140,20 +156,30 @@ void ChunkedTileMap::applyDefaultPalette() {
     setPalette(pal);
 }
 
+// Обе функции зовут из UI/тестов, пока симуляция живёт своей жизнью, поэтому
+// им нужны ДВЕ блокировки, а не ноль, как было раньше:
+//  - shared на store: коммит удаляет опустевшие чанки (ChunkStore::eraseLocked),
+//    и find() по карте параллельно с erase() - это итератор в освобождённую
+//    память, а не просто устаревшее значение;
+//  - chunkMutex самого чанка: commitReady() делает std::swap буферов чанка,
+//    так что чтение renderBuffer/simBuffer без него может попасть ровно в
+//    момент подмены.
+// shared_ptr копируется под shared-локом намеренно: он держит чанк живым на
+// время чтения, даже если store успеет его удалить сразу после разблокировки.
 int ChunkedTileMap::getTileState(int x, int y) const {
     CellLocation loc = m_grid.locate(x, y);
-    auto it = m_store.map().find(loc.coord);
-    if (it == m_store.map().end()) return 0;
-    const auto& chunk = *it->second;
-    return static_cast<int>(chunk.renderBuffer[loc.index(chunk.chunkSize)]);
+    std::shared_ptr<Chunk> chunk = m_store.getShared(loc.coord);
+    if (!chunk) return 0;
+    std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
+    return static_cast<int>(chunk->renderBuffer[loc.index(chunk->chunkSize)]);
 }
 
 int ChunkedTileMap::getSimTileState(int x, int y) const {
     CellLocation loc = m_grid.locate(x, y);
-    auto it = m_store.map().find(loc.coord);
-    if (it == m_store.map().end()) return 0;
-    const auto& chunk = *it->second;
-    return static_cast<int>(chunk.simBuffer[loc.index(chunk.chunkSize)]);
+    std::shared_ptr<Chunk> chunk = m_store.getShared(loc.coord);
+    if (!chunk) return 0;
+    std::lock_guard<std::mutex> cellLock(chunk->chunkMutex);
+    return static_cast<int>(chunk->simBuffer[loc.index(chunk->chunkSize)]);
 }
 
 void ChunkedTileMap::render(const Camera2D& camera) {

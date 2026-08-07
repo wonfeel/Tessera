@@ -69,7 +69,10 @@ public:
             if (c) simulateChunk(*c);
     }
 
+    // Берёт блокировку store'а сам - вызывать БЕЗ удерживаемого m_store.mutex().
     Chunk* getOrCreateChunk(ChunkCoord coord);
+    // Для вызывающих, уже держащих unique-блокировку m_store.mutex().
+    Chunk* getOrCreateChunkLocked(ChunkCoord coord);
     void setPalette(const std::vector<glm::vec3>& palette);
     void applyDefaultPalette();
     virtual void commitInitialState();
@@ -124,6 +127,10 @@ public:
     std::vector<uint8_t> getExtendedNeighborhood(const Chunk& chunk, int border = 1) const;
 
 protected:
+    // Фабрика чанков для ChunkStore - общая для getOrCreateChunk и
+    // getOrCreateChunkLocked, чтобы оба создавали чанк одинаково.
+    ChunkStore::Factory chunkFactory();
+
     // Геометрия сетки: размеры мира, размер чанка/тайла и перевод координат.
     ChunkGrid m_grid;
 
