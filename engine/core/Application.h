@@ -60,6 +60,17 @@ protected:
     // The base implementation shows nothing.
     virtual void onImGui() {}
 
+    // Override for ONE-TIME ImGui setup that must run before the first
+    // NewFrame() — loading extra fonts (io.Fonts->AddFontFromFileTTF) or
+    // anything else that touches the font atlas. Called once from the
+    // render thread, right after the ImGui context/backend are created
+    // (see renderLoop()'s m_imguiReady block), i.e. strictly before the
+    // first ImGui::NewFrame() of the app's lifetime — the atlas is locked
+    // from NewFrame() until Render() on every frame after that (see
+    // imgui_draw.cpp's Locked flag), so onImGui() itself is too late for
+    // this. Unlike onInit(), the ImGui context actually exists here.
+    virtual void onImGuiInit() {}
+
     virtual void onCameraUpdate(float dt);
     void updatePerformanceDisplay(int fps, int cpuPercent);
 

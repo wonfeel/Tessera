@@ -261,6 +261,13 @@ void Application::renderLoop() {
             clipIo.GetClipboardTextFn = &Application::imguiGetClipboardText;
             clipIo.SetClipboardTextFn = &Application::imguiSetClipboardText;
             clipIo.ClipboardUserData = this;
+            // Атлас ещё не заблокирован (до первого NewFrame() ниже) - см.
+            // Application.h за тем, почему это единственное безопасное место
+            // для демок, добавляющих свои шрифты (onImGui() уже опоздал -
+            // R6010 "Cannot modify a locked ImFontAtlas", воспроизведено и
+            // проверено на этой машине при вызове AddFontFromFileTTF из
+            // onImGui() до этого хука).
+            onImGuiInit();
             m_imguiReady = true;
         }
 
