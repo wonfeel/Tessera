@@ -11,22 +11,39 @@ jobs:
     runs-on: windows-latest
 
     steps:
+      # actions/checkout - это всегда ЧИСТЫЙ клон, ровно то, что получит
+      # посторонний человек. Именно поэтому сборка ниже собирает ВСЁ, а не
+      # пару целей: дважды случалось, что файл был в рабочем дереве, но не
+      # закоммичен (LightWaveCuda.cu, потом Geometry/Color/RenderTarget), и
+      # локально всё собиралось, а из чистого клона - нет. Прежний CI этого
+      # не ловил, потому что собирал только Test_correctness/Test_propagation,
+      # то есть ровно ту часть дерева, которой недостающие файлы не касались.
       - uses: actions/checkout@v4
 
       - name: Set up MSVC environment
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Configure (CPU-only, no CUDA)
-        run: cmake --preset x64-release
+      # TESSERA_FFMPEG_ENABLED=OFF: ffmpeg нужен только для MP4-записи экрана
+      # (ScreenRecorder), которую в headless-CI всё равно не запустить, а
+      # качать ради этого ~90MB на каждый прогон - лишние минуты и лишний
+      # внешний хост, который может лечь и уронить сборку. Сам код при OFF
+      # компилируется целиком, просто без MP4-бэкенда.
+      - name: Configure (CPU-only, no CUDA, no ffmpeg download)
+        run: cmake --preset x64-release -DTESSERA_FFMPEG_ENABLED=OFF
         working-directory: ${{ github.workspace }}
 
-      - name: Build
-        run: cmake --build out/build/x64-release --target Test_correctness Test_propagation
+      # Без --target: собираем каждую цель, объявленную в дереве (все демки,
+      # все тесты и калибровочные стенды). Это и есть проверка "репозиторий
+      # самодостаточен" - любой незакоммиченный файл ломает сборку здесь, а
+      # не у того, кто клонировал проект впервые.
+      - name: Build everything (verifies the clean clone is self-contained)
+        run: cmake --build out/build/x64-release
         working-directory: ${{ github.workspace }}
 
       - name: Run Test_correctness
         run: out/build/x64-release/Test_correctness.exe
         working-directory: ${{ github.workspace }}
 
-      # Test_propagation needs an OpenGL context (GLFW hidden window).
-      # GitHub runners have no GPU/display — skipped here, run locally.
+      # Test_propagation требует GL-контекст (скрытое окно GLFW). У раннеров
+      # GitHub нет ни GPU, ни дисплея - собирается (шагом выше), но не
+      # запускается; гонять локально.
