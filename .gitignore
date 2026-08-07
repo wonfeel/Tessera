@@ -45,3 +45,14 @@ Desktop.ini
 #docs/
 
 build_err.txt
+
+# Трейсы, которые пишут диагностические прогоны (dev/m5/st/water_trace.txt,
+# light_watchdog.log) - выход инструментов, а не исходники.
+*_trace.txt
+light_watchdog.log
+
+# Выход graphify (инструмент построения графа знаний по репозиторию).
+graphify-out/
+
+# Python-кэш вспомогательных скриптов в tests/.
+__pycache__/
