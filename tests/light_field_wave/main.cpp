@@ -133,6 +133,9 @@ bool testMediumPolygon() {
         {center.x - 173.0f, center.y + 100.0f},
     };
     field.paintMediumPolygon(triangle, 1.0f);
+    // step() публикует кадр для рендера; dt=0 - физику не двигает, только
+    // проталкивает свежую маску в слот, который читает snapshot().
+    field.step(0.0f, 100.0f, 0.0f, 0.0f);
 
     std::vector<float> glow, mask, accum;
     field.snapshot(glow, mask, accum);

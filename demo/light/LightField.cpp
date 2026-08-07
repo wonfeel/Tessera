@@ -1,31 +1,25 @@
 // demo/light/LightField.cpp
 #include "demo/light/LightField.h"
 #include "engine/core/ParallelFor.h"
+#include "engine/core/Geometry.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace {
     constexpr float kGlowDecay = 0.90f;
-    constexpr float kGlowContrast = 3.0f;   // см. пояснение в cloth/SpringNetwork.cpp - тот же приём
     constexpr float kLogEps = 1e-4f;
-    constexpr float kMinAvgSpeed = 0.05f;   // доля от spacing/сек - тот же смысл, что в cloth-модели
-    constexpr float kMinAvgHeight = 0.01f;  // доля от spacing - "почти покой" по амплитуде
+    constexpr float kMinAvgSpeed = 0.05f;
+    constexpr float kMinAvgHeight = 0.01f;
 
-    // Долгая выдержка - в отличие от фиксированного ACCUMULATED_EXPOSURE в
-    // Light-Simulation-JS (см. README.md), здесь адаптивная: копится не сырой
-    // |height|, а та же нормализованная относительно avgSpeed доля энергии,
-    // что идёт в m_glow (см. её вычисление ниже) - kAccumRate это скорость
-    // насыщения в 1/сек при МАКСИМАЛЬНОЙ относительной энергии узла. Без
-    // этого накопление либо мгновенно уходило в белое при большом
-    // waveSpeedSq/pluckStrength, либо было еле заметно при маленьких - тюнинг
-    // физики и тюнинг скорости накопления были жёстко связаны через одну
-    // константу.
-    constexpr float kAccumRate = 0.06f;
+    // m_accum - EMA к текущему normLinear (dA/dt = kAccumRate*(target-A)):
+    // при constexpr rate решение за подшаг - accum + (target-accum)*(1-exp(-rate*dt)),
+    // строго ограничено диапазоном [min(accum,target), max(accum,target)] - в
+    // отличие от раздельных rate/decay не может уйти выше 1 под непрерывным
+    // источником (авто-луч), только к нему сходится.
+    constexpr float kAccumRate = 0.15f;   // ~6.7с до 63% скачка
 }
 
-// Геометрия гекс-решётки живёт в engine/core/HexGrid.h (общая для всех
-// демок), эти обёртки просто держат публичный API LightField неизменным.
 float LightField::hexHorizSpacing() const { return HexGrid::horizSpacing(m_spacing); }
 float LightField::hexVertSpacing() const { return HexGrid::vertSpacing(m_spacing); }
 
@@ -47,13 +41,17 @@ void LightField::reset() {
     m_force.assign(n, 0.0f);
     m_mediumMask.assign(n, 0.0f);
     m_pinned.assign(n, 0);
-    m_glow.assign(n, 0.0f);
-    m_accum.assign(n, 0.0f);
+    for (int s = 0; s < kSlots; ++s) {
+        m_glowSlot[s].assign(n, 0.0f);
+        m_accumSlot[s].assign(n, 0.0f);
+        m_maskSlot[s].assign(n, 0.0f);
+    }
+    m_writeSlot = 0;
+    m_readySlot.store(0, std::memory_order_release);
+    m_maskDirtyFrames = kSlots;
 
     for (int r = 0; r < m_rows; ++r) {
         for (int c = 0; c < m_cols; ++c) {
-            // Край сетки закреплён на h=0 - отражающая граница (та же роль,
-            // что pinned-края в cloth-модели), не пропускает волну наружу.
             if (r == 0 || r == m_rows - 1 || c == 0 || c == m_cols - 1) {
                 m_pinned[static_cast<size_t>(index(c, r))] = 1;
             }
@@ -69,7 +67,10 @@ void LightField::reset() {
 
 void LightField::resetAccumulation() {
     std::lock_guard<std::mutex> lock(m_mutex);
-    std::fill(m_accum.begin(), m_accum.end(), 0.0f);
+    // Чистим все слоты: следующий шаг читает предыдущий как основу EMA, так
+    // что уцелевший в нём хвост протёк бы обратно в свежий кадр.
+    for (int s = 0; s < kSlots; ++s)
+        std::fill(m_accumSlot[s].begin(), m_accumSlot[s].end(), 0.0f);
 }
 
 int LightField::chunkNeighbors(int chunkCol, int chunkRow, int out[8]) const {
@@ -91,16 +92,11 @@ void LightField::step(float dt, float waveSpeedSq, float dampingRate, float disp
 
     const int n = static_cast<int>(m_height.size());
 
-    // dt==0 (пауза) раньше делало ранний return - pluck()/brush() пишут в
-    // m_height/m_velocity напрямую, но m_glow пересчитывается только здесь,
-    // так что взаимодействие на паузе оставалось невидимым до следующего
-    // живого шага. Интегратор всё ещё пропускаем при dt==0, но яркость и
-    // активность чанков теперь считаются безусловно, ниже.
+    // dt==0 (пауза) - интегратор пропускаем, но glow/активность чанков всё
+    // равно считаются ниже: pluck()/brush() пишут в m_height/m_velocity
+    // напрямую, а m_glow пересчитывается только здесь.
     const bool doPhysics = dt > 0.0f;
 
-    // Устойчивость - тот же приём, что в cloth-модели (SpringNetwork::step):
-    // дробим шаг на substeps так, чтобы waveSpeedSq*dtSub^2 оставался в
-    // безопасных пределах явного интегратора.
     constexpr float kStabilityLimit = 2.0f;
     constexpr int kMaxSubsteps = 16;
     int substeps = 1;
@@ -110,18 +106,9 @@ void LightField::step(float dt, float waveSpeedSq, float dampingRate, float disp
     }
     if (doPhysics) m_lastSubsteps.store(substeps, std::memory_order_relaxed);
 
-    if (doPhysics) {
-    const float subDt = dt / static_cast<float>(substeps);
-    const float dampFactor = std::exp(-dampingRate * subDt);
-
-    // Клэмп скорости вместо телепорта на NaN/Inf - тот же трюк, что решил
-    // "замятины" в cloth-модели (см. её step()).
-    constexpr float kMaxDisplacementPerSubstep = 2.0f;
-    const float maxSpeed = kMaxDisplacementPerSubstep * m_spacing / subDt;
-
-    // Список чанков к обработке - активные + их halo-соседи (см. .h). Без
-    // CSR/рёбер: "обработать чанк" значит просто пройти его прямоугольник
-    // узлов напрямую индексами.
+    // Footprint активных чанков (+соседи) - нужен физике и яркости
+    // одинаково, считаем один раз вне doPhysics, чтобы работал и на паузе
+    // (pluck() на паузе тоже будит чанк, glow должен подсветиться).
     {
         std::vector<uint8_t> include(static_cast<size_t>(m_numChunks), 0);
         for (int c = 0; c < m_numChunks; ++c) {
@@ -136,19 +123,36 @@ void LightField::step(float dt, float waveSpeedSq, float dampingRate, float disp
     }
     const int numProcessChunks = static_cast<int>(m_processChunks.size());
 
+    if (doPhysics) {
+    const float subDt = dt / static_cast<float>(substeps);
+    const float dampFactor = std::exp(-dampingRate * subDt);
+
+    // Поглощающий слой у края - m_pinned-граница сама по себе отражает
+    // энергию полностью, превращая конечное поле в резонатор вместо
+    // открытого пространства. Затухание растёт к краю квадратично, не
+    // ступенькой (резкий скачок сам даёт отражение). dampingRate в толще
+    // поля может быть 0 - у света нет потерь на трение о вакуум/воздух,
+    // именно граница должна быть агрессивно поглощающей.
+    constexpr int kAbsorbLayerCells = 40;
+    constexpr float kAbsorbExtraDamping = 400.0f;
+    float dampLookup[kAbsorbLayerCells + 1];
+    for (int d = 0; d <= kAbsorbLayerCells; ++d) {
+        float t = 1.0f - static_cast<float>(d) / static_cast<float>(kAbsorbLayerCells);
+        dampLookup[d] = std::exp(-(dampingRate + t * t * kAbsorbExtraDamping) * subDt);
+    }
+
+    constexpr float kMaxDisplacementPerSubstep = 2.0f;
+    const float maxSpeed = kMaxDisplacementPerSubstep * m_spacing / subDt;
+
     for (int s = 0; s < substeps; ++s) {
-        // Фаза 1 - сила на каждый узел процессируемых чанков. Каждый узел
-        // ЧИТАЕТ 6 гекс-соседей (общий, не мутируемый в этой фазе m_height) и
-        // ПИШЕТ только в свой собственный m_force[i] - race-free при любом
-        // разбиении на потоки/чанки, без атомиков и без CSR (в отличие от
-        // cloth-модели, где пружина связывала ДВА узла и писала в оба -
-        // здесь запись всегда в "себя", соседи только читаются).
+        // Каждый узел читает 6 гекс-соседей и пишет только в свой m_force[i] -
+        // race-free без атомиков и без CSR.
         parallelFor(numProcessChunks, [&](int begin, int end, int) {
             for (int idx = begin; idx < end; ++idx) {
                 int c = m_processChunks[static_cast<size_t>(idx)];
                 int cx = c % m_chunksX, cy = c / m_chunksX;
                 int rowLo = std::max(1, cy * kChunkSize);
-                int rowHi = std::min((cy + 1) * kChunkSize, m_rows - 1);   // исключая границу
+                int rowHi = std::min((cy + 1) * kChunkSize, m_rows - 1);
                 int colLo = std::max(1, cx * kChunkSize);
                 int colHi = std::min((cx + 1) * kChunkSize, m_cols - 1);
                 for (int r = rowLo; r < rowHi; ++r) {
@@ -156,13 +160,6 @@ void LightField::step(float dt, float waveSpeedSq, float dampingRate, float disp
                         int i = index(col, r);
                         if (m_pinned[static_cast<size_t>(i)]) { m_force[static_cast<size_t>(i)] = 0.0f; continue; }
 
-                        // Гекс-лапласиан: 6 равноудалённых соседей с
-                        // единичными весами - sum(6 соседей) - 6*center, без
-                        // деления на осевые/диагональные классы (см. .h).
-                        // Смещения из HexGrid::neighborOffsets() всегда в
-                        // пределах {-1,0,+1} по col и row, для внутреннего
-                        // узла (rowLo/rowHi/colLo/colHi выше уже исключают
-                        // границу) индексы соседей гарантированно валидны.
                         float c0 = m_height[static_cast<size_t>(i)];
                         const auto* offs = HexGrid::neighborOffsets(r);
                         float sum = 0.0f;
@@ -179,37 +176,44 @@ void LightField::step(float dt, float waveSpeedSq, float dampingRate, float disp
             }
         });
 
-        // Фаза 2 - интегрирование, безусловно по ВСЕМ n узлам (та же
-        // причина, что в cloth-модели: узел на границе активного/неактивного
-        // чанка мог получить ненулевую силу - граница обработки чанка выше
-        // (rowLo/rowHi) НЕ пересекает саму себя между чанками, но halo уже
-        // включил соседей, так что это просто безопасный процесс поверх
-        // финального m_force).
-        parallelFor(n, [&](int begin, int end, int) {
-            for (int i = begin; i < end; ++i) {
-                if (m_pinned[static_cast<size_t>(i)]) continue;
-                float v = m_velocity[static_cast<size_t>(i)];
-                v += m_force[static_cast<size_t>(i)] * subDt;
-                v *= dampFactor;
-                if (std::fabs(v) > maxSpeed) v = (v > 0 ? maxSpeed : -maxSpeed);
+        // Тот же footprint, что и у силы выше - иначе на спящих узлах
+        // копилось бы протухшее m_force с момента, когда чанк ещё не спал
+        // (сила там больше не пересчитывается). Чанк засыпает только когда
+        // v и h уже ниже wake-порогов, так что заморозка их тут незаметна.
+        parallelFor(numProcessChunks, [&](int begin, int end, int) {
+            for (int idx = begin; idx < end; ++idx) {
+                int c = m_processChunks[static_cast<size_t>(idx)];
+                int cx = c % m_chunksX, cy = c / m_chunksX;
+                int rowLo = std::max(1, cy * kChunkSize);
+                int rowHi = std::min((cy + 1) * kChunkSize, m_rows - 1);
+                int colLo = std::max(1, cx * kChunkSize);
+                int colHi = std::min((cx + 1) * kChunkSize, m_cols - 1);
+                for (int r = rowLo; r < rowHi; ++r) {
+                    for (int col = colLo; col < colHi; ++col) {
+                        int i = index(col, r);
+                        if (m_pinned[static_cast<size_t>(i)]) continue;
+                        float v = m_velocity[static_cast<size_t>(i)];
+                        v += m_force[static_cast<size_t>(i)] * subDt;
 
-                float h = m_height[static_cast<size_t>(i)] + v * subDt;
-                if (!std::isfinite(h) || !std::isfinite(v)) { h = 0.0f; v = 0.0f; }
+                        int distToEdge = std::min(std::min(col, m_cols - 1 - col), std::min(r, m_rows - 1 - r));
+                        v *= (distToEdge < kAbsorbLayerCells) ? dampLookup[distToEdge] : dampFactor;
+                        if (std::fabs(v) > maxSpeed) v = (v > 0 ? maxSpeed : -maxSpeed);
 
-                m_velocity[static_cast<size_t>(i)] = v;
-                m_height[static_cast<size_t>(i)] = h;
+                        float h = m_height[static_cast<size_t>(i)] + v * subDt;
+                        if (!std::isfinite(h) || !std::isfinite(v)) { h = 0.0f; v = 0.0f; }
+
+                        m_velocity[static_cast<size_t>(i)] = v;
+                        m_height[static_cast<size_t>(i)] = h;
+                    }
+                }
             }
         });
     }
     }   // doPhysics
 
-    // Яркость - геометрическая (лог-)нормализация Reinhard-типа, как в
-    // cloth-модели, но на max(|velocity|, |height|), не только скорость.
-    // pluck() двигает только m_height - на паузе (doPhysics==false) скорость
-    // ещё 0, интегратор её не превратил в движение, чисто по |velocity| щипок
-    // был бы невидим до следующего живого шага. |height| - потенциальная
-    // энергия, натянутая, но ещё не высвобожденная, тоже должна светиться.
-    // Считается безусловно, даже на паузе.
+    // Яркость - Reinhard-подобная нормализация на max(|velocity|, |height|):
+    // pluck() двигает только m_height, на паузе интегратор ещё не превратил
+    // это в скорость, чисто по |velocity| щипок был бы не виден.
     std::vector<float> speedBuf(static_cast<size_t>(n));
     const size_t numThreads = std::max<size_t>(1, TaskScheduler::instance().thread_count());
     std::vector<float> sumLogT(numThreads, 0.0f);
@@ -230,26 +234,52 @@ void LightField::step(float dt, float waveSpeedSq, float dampingRate, float disp
         : kMinAvgSpeed * m_spacing;
     m_lastAvgSpeed.store(avgSpeed, std::memory_order_relaxed);
 
-    parallelFor(n, [&](int begin, int end, int) {
-        for (int i = begin; i < end; ++i) {
-            float normLinear = speedBuf[static_cast<size_t>(i)] / (speedBuf[static_cast<size_t>(i)] + avgSpeed);
-            float norm = std::pow(normLinear, kGlowContrast);
-            m_glow[static_cast<size_t>(i)] = std::max(norm, m_glow[static_cast<size_t>(i)] * kGlowDecay);
-            // Долгая выдержка - монотонно растёт, никогда не затухает сама
-            // (в отличие от m_glow выше), main.cpp клэмпит/возводит в
-            // степень при отображении, см. её описание в .h. Копится
-            // normLinear (та же адаптивная относительно avgSpeed доля, что и
-            // у glow до контраста), не сырой |height| - см. пояснение у
-            // kAccumRate выше.
-            m_accum[static_cast<size_t>(i)] += normLinear * kAccumRate * dt;
+    // alpha не зависит от узла (dt один на весь step()) - считаем раз, не
+    // на каждый из 160к*3 узлов. norm - куб вместо std::pow(x,3), тот же
+    // контраст в разы дешевле (нет общего показателя степени, он и не нужен -
+    // экспонента всегда 3).
+    const float accumAlpha = 1.0f - std::exp(-kAccumRate * dt);
+    // Пишем в текущий слот, читая предыдущий - затухание glow и EMA accum и
+    // так опираются на прошлый кадр, так что ротация им ничего не стоит.
+    const int prevSlot = (m_writeSlot + kSlots - 1) % kSlots;
+    float* glowCur = m_glowSlot[m_writeSlot].data();
+    const float* glowPrev = m_glowSlot[prevSlot].data();
+    float* accumCur = m_accumSlot[m_writeSlot].data();
+    const float* accumPrev = m_accumSlot[prevSlot].data();
+
+    // Тот же footprint активных чанков - у спящего узла normLinear уже
+    // ниже wake-порога, его glow/accum и так должны быть у нуля; не
+    // пересчитывать их каждый кадр на всём поле безопасно и на порядок
+    // дешевле для большого в основном спящего поля.
+    parallelFor(numProcessChunks, [&](int begin, int end, int) {
+        for (int idx = begin; idx < end; ++idx) {
+            int c = m_processChunks[static_cast<size_t>(idx)];
+            int cx = c % m_chunksX, cy = c / m_chunksX;
+            int rowLo = std::max(1, cy * kChunkSize);
+            int rowHi = std::min((cy + 1) * kChunkSize, m_rows - 1);
+            int colLo = std::max(1, cx * kChunkSize);
+            int colHi = std::min((cx + 1) * kChunkSize, m_cols - 1);
+            for (int r = rowLo; r < rowHi; ++r) {
+                for (int col = colLo; col < colHi; ++col) {
+                    int i = index(col, r);
+                    float normLinear = speedBuf[static_cast<size_t>(i)] / (speedBuf[static_cast<size_t>(i)] + avgSpeed);
+                    float norm = normLinear * normLinear * normLinear;
+                    float g = std::max(norm, glowPrev[i] * kGlowDecay);
+                    glowCur[i] = g;
+                    // Копим уже контрастный glow, не сырой normLinear - в
+                    // разреженном (по большей части спящем) поле avgSpeed
+                    // крошечный, и даже слабая рябь получает normLinear~1;
+                    // долгая выдержка такое усредняет в сплошной белый. glow
+                    // уже давит слабое кубом.
+                    float a = accumPrev[i];
+                    accumCur[i] = a + (g - a) * accumAlpha;
+                }
+            }
         }
     });
 
-    // Пересчёт активности чанков - та же гистерезис-схема, что в
-    // cloth-модели, но проверяем И скорость, И "сырую" амплитуду (|h|), а не
-    // только скорость: узел в момент разворота колебания (v проходит через
-    // ноль дважды за период) всё ещё несёт энергию в h - проверка только по
-    // |velocity| рисковала бы усыпить чанк ровно в этот момент.
+    // Активность чанков - гистерезис по скорости И по |height| (узел в
+    // момент разворота колебания всё ещё несёт энергию в h).
     constexpr int kIdleFramesToDeactivate = 12;
     const float wakeSpeed = kMinAvgSpeed * m_spacing;
     const float wakeHeight = kMinAvgHeight * m_spacing;
@@ -271,9 +301,44 @@ void LightField::step(float dt, float waveSpeedSq, float dampingRate, float disp
             } else if (m_chunkActive[static_cast<size_t>(c)] && ++m_chunkIdleFrames[static_cast<size_t>(c)] >= kIdleFramesToDeactivate) {
                 m_chunkActive[static_cast<size_t>(c)] = 0;
                 m_chunkIdleFrames[static_cast<size_t>(c)] = 0;
+                // Уснувший чанк больше не переписывается каждый кадр, а слоты
+                // чередуются - без этого рендер увидел бы, как его последние
+                // значения мигают по кругу из трёх устаревших копий. Ровняем
+                // слоты один раз, на переходе; пока чанк спит, они совпадают.
+                syncChunkAcrossSlots(rowLo, rowHi, colLo, colHi);
             }
         }
     }
+
+    publish();
+}
+
+void LightField::syncChunkAcrossSlots(int rowLo, int rowHi, int colLo, int colHi) {
+    for (int s = 0; s < kSlots; ++s) {
+        if (s == m_writeSlot) continue;
+        for (int r = rowLo; r < rowHi; ++r) {
+            size_t from = static_cast<size_t>(index(colLo, r));
+            size_t count = static_cast<size_t>(colHi - colLo);
+            std::copy_n(m_glowSlot[m_writeSlot].begin() + from, count, m_glowSlot[s].begin() + from);
+            std::copy_n(m_accumSlot[m_writeSlot].begin() + from, count, m_accumSlot[s].begin() + from);
+        }
+    }
+}
+
+// Публикация без копирования: маска переливается в слоты только когда её
+// реально меняли (кисть/карта), а сам кадр отдаётся одним atomic-store
+// индекса. Дальше физика уходит на следующий слот.
+void LightField::publish() {
+    // Маску переливаем ТОЛЬКО в свой слот и только пока счётчик не обнулится:
+    // разом во все слоты нельзя - один из них в этот момент читает рендер.
+    // За kSlots шагов новая маска доходит до каждого, и каждый раз запись
+    // идёт в слот, который ещё не опубликован.
+    if (m_maskDirtyFrames > 0) {
+        m_maskSlot[m_writeSlot] = m_mediumMask;
+        --m_maskDirtyFrames;
+    }
+    m_readySlot.store(m_writeSlot, std::memory_order_release);
+    m_writeSlot = (m_writeSlot + 1) % kSlots;
 }
 
 void LightField::activateChunksInWindow(int colLo, int colHi, int rowLo, int rowHi) {
@@ -295,12 +360,8 @@ void LightField::activateChunkAt(int nodeIndex) {
 
 void LightField::windowAround(glm::vec2 worldPos, float radiusCells,
                                int& colLo, int& colHi, int& rowLo, int& rowHi) const {
-    // Обратное преобразование мировой позиции в (col,row) - только ПРИБЛИЖЁННОЕ
-    // (для оценки строки игнорируется полуклеточный сдвиг нечётных строк по
-    // col, учитывается только после того, как rowC уже известен), этого
-    // достаточно - вызывающие (pluck/brush/...) всё равно потом ищут ближайший
-    // узел ПЕРЕБОРОМ по фактическому расстоянию внутри окна (см. их код), а
-    // не полагаются на точность (colC,rowC) как на финальный ответ.
+    // Приближённое обратное преобразование - вызывающие всё равно ищут
+    // ближайший узел перебором по факту, точность (colC,rowC) не критична.
     float horiz = HexGrid::horizSpacing(m_spacing);
     float vert = HexGrid::vertSpacing(m_spacing);
     int rowC = static_cast<int>(std::round(worldPos.y / vert));
@@ -330,12 +391,10 @@ void LightField::pluck(glm::vec2 worldPos, float strength) {
     }
     if (best < 0) return;
     activateChunkAt(best);
-    // Клэмп как в cloth-модели (SpringNetwork::pluck()) - без него абсурдный
-    // strength из текстового поля (sliderWithInput() не обрезает ручной ввод)
-    // даёт высоту на порядки больше нормы. Клэмп скорости в step() абсолютный,
-    // не пропорциональный высоте - без этого клэмпа стравливание такой
-    // аномалии заняло бы миллиарды кадров, выглядело бы как замёрзшая
-    // картинка, не как волна.
+    // Клэмп - неограниченный strength из текстового поля (слайдер не
+    // обрезает ручной ввод) даёт высоту на порядки больше нормы, а клэмп
+    // скорости в step() абсолютный - стравливание такой аномалии заняло бы
+    // миллиарды кадров.
     constexpr float kMaxPluckDisplacement = 3.0f;   // в единицах m_spacing
     float clamped = std::clamp(strength, -kMaxPluckDisplacement * m_spacing, kMaxPluckDisplacement * m_spacing);
     m_height[static_cast<size_t>(best)] += clamped;
@@ -400,6 +459,7 @@ void LightField::paintMedium(glm::vec2 worldPos, float radius, float strength, f
             mask = std::clamp(mask + strength * falloff * dt, 0.0f, 1.0f);
         }
     }
+    m_maskDirtyFrames = kSlots;   // разольётся по слотам за следующие шаги
 }
 
 void LightField::eraseMedium(glm::vec2 worldPos, float radius, float strength, float dt) {
@@ -420,33 +480,32 @@ void LightField::eraseMedium(glm::vec2 worldPos, float radius, float strength, f
             mask = std::clamp(mask - strength * falloff * dt, 0.0f, 1.0f);
         }
     }
+    m_maskDirtyFrames = kSlots;
 }
 
 void LightField::paintMediumPolygon(const std::vector<glm::vec2>& polygonWorld, float value) {
     std::lock_guard<std::mutex> lock(m_mutex);
     if (polygonWorld.size() < 3) return;
     const float clampedValue = std::clamp(value, 0.0f, 1.0f);
-    const int vertCount = static_cast<int>(polygonWorld.size());
 
-    // Чётно-нечётное правило (ray casting) - стандартный point-in-polygon
-    // тест, полигон не обязан быть выпуклым. Полный проход по сетке -
-    // вызывается по кнопке пресета, не каждый кадр, оптимизировать нечего.
+    // Резкая граница 0->1 - для FDTD-сетки это скачок импеданса, волна
+    // отражается вместо честного преломления. featherWidth растягивает
+    // переход на несколько клеток.
+    const float featherWidth = HexGrid::horizSpacing(m_spacing) * 1.5f;
+
     for (int r = 1; r < m_rows - 1; ++r) {
         for (int c = 1; c < m_cols - 1; ++c) {
             int i = index(c, r);
             if (m_pinned[static_cast<size_t>(i)]) continue;
             glm::vec2 p = LightField::worldPos(c, r);
-            bool inside = false;
-            for (int a = 0, b = vertCount - 1; a < vertCount; b = a++) {
-                const glm::vec2& pa = polygonWorld[static_cast<size_t>(a)];
-                const glm::vec2& pb = polygonWorld[static_cast<size_t>(b)];
-                bool crosses = ((pa.y > p.y) != (pb.y > p.y)) &&
-                    (p.x < (pb.x - pa.x) * (p.y - pa.y) / (pb.y - pa.y) + pa.x);
-                if (crosses) inside = !inside;
+            float minEdgeDist;
+            if (Geometry::pointInPolygon(p, polygonWorld, minEdgeDist)) {
+                float t = std::clamp(minEdgeDist / featherWidth, 0.0f, 1.0f);
+                m_mediumMask[static_cast<size_t>(i)] = clampedValue * t;
             }
-            if (inside) m_mediumMask[static_cast<size_t>(i)] = clampedValue;
         }
     }
+    m_maskDirtyFrames = kSlots;
 }
 
 void LightField::beam(glm::vec2 origin, glm::vec2 direction, float aperture,
@@ -456,13 +515,10 @@ void LightField::beam(glm::vec2 origin, glm::vec2 direction, float aperture,
     float dirLen = glm::length(direction);
     if (dirLen < 1e-5f) return;
     glm::vec2 dir = direction / dirLen;
-    glm::vec2 perp(-dir.y, dir.x);   // вдоль perp располагаются узлы-излучатели
+    glm::vec2 perp(-dir.y, dir.x);
 
     constexpr float kTwoPi = 6.283185307179586f;
-    // Толщина полосы вдоль direction - геометрически линия излучателей
-    // бесконечно тонкая, но сетка дискретна: берём пару клеток запаса, чтобы
-    // хотя бы один ряд узлов гарантированно попал в полосу на любой
-    // ориентации direction.
+    constexpr float kPi = 3.14159265358979323846f;
     const float thickness = hexHorizSpacing() * 1.5f;
     const float halfAperture = aperture * 0.5f;
 
@@ -470,10 +526,8 @@ void LightField::beam(glm::vec2 origin, glm::vec2 direction, float aperture,
     windowAround(origin, (halfAperture + thickness) / hexHorizSpacing() + 4.0f,
                  colLo, colHi, rowLo, rowHi);
 
-    // Одна и та же фаза для ВСЕХ излучателей линии (нулевой сдвиг фазы вдоль
-    // perp) - интерференция сама выстраивает направленность вдоль direction
-    // без явного управления фазой на узел, та же физика, что у синфазной
-    // антенной решётки.
+    // Одна фаза для всех излучателей линии - направленность вдоль direction
+    // строится интерференцией, та же физика, что у фазированной решётки.
     float injection = strength * std::sin(kTwoPi * frequency * time) * dt;
 
     for (int r = rowLo; r <= rowHi; ++r) {
@@ -484,16 +538,27 @@ void LightField::beam(glm::vec2 origin, glm::vec2 direction, float aperture,
             float along = glm::dot(rel, perp);
             float across = glm::dot(rel, dir);
             if (std::fabs(along) > halfAperture || std::fabs(across) > thickness) continue;
-            m_velocity[static_cast<size_t>(i)] += injection;
+            // Окно Ханна вдоль апертуры - резкий обрыв на краях линии даёт
+            // sinc-паттерн (дифракция Фраунгофера) с медленно затухающими
+            // боковыми лепестками - плавный спад до нуля их гасит.
+            float taper = 0.5f * (1.0f + std::cos(kPi * along / halfAperture));
+            m_velocity[static_cast<size_t>(i)] += injection * taper;
         }
     }
     activateChunksInWindow(colLo, colHi, rowLo, rowHi);
 }
 
+LightField::View LightField::acquireView() const {
+    int s = m_readySlot.load(std::memory_order_acquire);
+    return View{ m_glowSlot[s].data(), m_maskSlot[s].data(), m_accumSlot[s].data() };
+}
+
+// Совместимость для тех, кому нужна именно копия. Локов не берёт вообще -
+// читает опубликованный слот, в который физика не пишет.
 void LightField::snapshot(std::vector<float>& outGlow, std::vector<float>& outMediumMask,
                            std::vector<float>& outAccum) const {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    outGlow = m_glow;
-    outMediumMask = m_mediumMask;
-    outAccum = m_accum;
+    int s = m_readySlot.load(std::memory_order_acquire);
+    outGlow = m_glowSlot[s];
+    outMediumMask = m_maskSlot[s];
+    outAccum = m_accumSlot[s];
 }

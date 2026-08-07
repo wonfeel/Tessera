@@ -7,108 +7,56 @@
 #include <cstdint>
 #include <glm/glm.hpp>
 
-// Скалярное волновое поле, замена пружинной 2D-сетки (demo/cloth) для волн
-// света. Позиция узла (x,y) зафиксирована как решётка, единственная степень
-// свободы - скалярная амплитуда h, эволюционирует по дискретному лапласиану
-// (d²h/dt² = c²∇²h). В cloth-модели узел двигался в плоскости - продольные и
-// поперечные упругие моды там расходятся по скорости, честной RGB-дисперсии
-// на этом не построить. Здесь одна скорость на поле, main.cpp держит три
-// экземпляра (R/G/B) с разной waveSpeedSq.
-//
-// Нет списка рёбер - сосед адресуется напрямую по индексу (index(c±1,r),
-// index(c±1,r±1)). Каждый узел читает соседей (m_height, не мутируется в
-// этой фазе) и пишет только в свой m_force[i] - race-free при любом
-// разбиении на потоки, без атомиков и без CSR (в cloth-модели пружина
-// связывала два узла и писала в оба, здесь только чтение соседа).
-//
-// Гекс-решётка (pointy-top, odd-r offset, см. engine/core/HexGrid.h) вместо
-// квадратной: все 6 соседей равноудалены (sqrt(3)*spacing по всем
-// направлениям), поэтому лапласиан - просто sum(6 соседей) - 6*center с
-// единичными весами, без деления на осевые/диагональные классы, как на
-// квадратной сетке (9-точечный стенсил, веса 4/1). Меньше соседей (6 вместо
-// 8) и честно изотропнее - круглый фронт от точечного источника без
-// квадратных артефактов.
+// Скалярное волновое поле на фиксированной гекс-решётке (d^2h/dt^2 =
+// c^2*lap(h)) - одна честная скорость волны на экземпляр, в отличие от
+// demo/cloth (узел двигался в плоскости, продольные/поперечные моды
+// расходятся по скорости). Нет списка рёбер - каждый узел пишет только
+// свой m_force[i], race-free без атомиков и CSR.
 class LightField {
 public:
     LightField(int cols, int rows, float spacing);
 
-    // Мировая позиция узла (col,row) - pointy-top гекс-раскладка (нечётные
-    // строки сдвинуты по горизонтали на полклетки). Публичный, т.к. нужен и
-    // рендеру (main.cpp собирает позицию вершины отсюда, не по формуле
-    // "col*spacing" - так и физика, и картинка используют ОДНУ и ту же
-    // геометрию, не две параллельные копии формулы).
     glm::vec2 worldPos(int col, int row) const;
 
-    // waveSpeedSq - квадрат скорости волны (аналог stiffness в cloth-модели,
-    // тот же смысл "тюнинг-константа", не привязанная к физическим единицам
-    // - как и раньше, замедление времени должно идти через dt, а не через
-    // количество вызовов step()). dispersion - насколько СИЛЬНО этот
-    // конкретный цвет тормозится в области "призмы" (m_mediumMask) -
-    // эффективная скорость на узле = waveSpeedSq * (1 - mediumMask[i]*dispersion),
-    // клэмпится снизу нулём. Разные dispersion на R/G/B дают хроматическое
-    // разделение при прохождении через призму.
-    //
-    // Пробовал делать число колец соседей настраиваемым (1-3) против
-    // 6-кратной анизотропии решётки - не помогло на резком точечном щипке
-    // (звезда там от высокочастотного содержимого источника, расширенный
-    // стенсил лечит только низкие/средние частоты). Убрано, всегда 1 кольцо
-    // (6 соседей).
+    // dispersion - насколько цвет тормозится в призме (m_mediumMask):
+    // эффективная скорость = waveSpeedSq * (1 - mediumMask[i]*dispersion).
     void step(float dt, float waveSpeedSq, float dampingRate, float dispersion);
 
-    // Щипок - разовый импульс АМПЛИТУДЫ (не позиции, как в cloth-модели) в
-    // ближайший свободный (не граничный) узел.
     void pluck(glm::vec2 worldPos, float strength);
-    // Кисть - впрыск СКОРОСТИ (dh/dt) в радиусе, накапливается, пока
-    // зажато - прямой аналог cloth-brush()/brushDamp(), только по амплитуде.
     void brush(glm::vec2 worldPos, float radius, float strength, float dt);
     void brushDamp(glm::vec2 worldPos, float radius, float strength, float dt);
 
-    // Рисование "призмы": повышает m_mediumMask в радиусе (насыщается к
-    // 1.0), НЕ трогает текущую волну - это свойство СРЕДЫ, отдельное от
-    // амплитуды. eraseMedium - обратный ластик (понижает к 0.0).
+    // Среда ("призма") - свойство поля, отдельное от амплитуды.
     void paintMedium(glm::vec2 worldPos, float radius, float strength, float dt);
     void eraseMedium(glm::vec2 worldPos, float radius, float strength, float dt);
-
-    // Заливает m_mediumMask ЗНАЧЕНИЕМ (не приращением, как paintMedium) во
-    // всех узлах внутри многоугольника (мировые координаты, четно-нечетное
-    // правило) - для готовых карт/пресетов (main.cpp), где форма призмы
-    // задана заранее, не рисуется мышью. Полный проход по сетке, не через
-    // windowAround - вызывается редко (по кнопке), не каждый кадр.
+    // Заливает m_mediumMask значением (не приращением) внутри многоугольника -
+    // для готовых карт (main.cpp), не для рисования мышью.
     void paintMediumPolygon(const std::vector<glm::vec2>& polygonWorld, float value);
 
-    // Направленный пучок - фазированная линия излучателей, не "стена"/канал.
-    // Узлы вдоль отрезка длиной aperture, идущего через origin перпендикулярно
-    // direction, колеблются синхронно (одна фаза, sin(2π*frequency*time)) -
-    // волны складываются конструктивно вдоль direction и гасят друг друга в
-    // стороны, та же физика, что у фазированной антенной решётки. aperture
-    // управляет шириной пучка (диффракционный предел: шире апертура в длинах
-    // волн - уже и направленнее пучок, реальный компромисс, не баг). time -
-    // накопленное время эмиссии (main.cpp считает, пока луч зажат), нужен для
-    // непрерывной фазы между кадрами.
+    // Фазированная линия излучателей (окно Ханна) перпендикулярно direction -
+    // направленность строится интерференцией, не "стеной"/каналом.
     void beam(glm::vec2 origin, glm::vec2 direction, float aperture,
               float frequency, float strength, float time, float dt);
 
     void reset();
-    // Только обнуляет m_accum - не трогает волну/среду, в отличие от
-    // полного reset(). Долгая выдержка монотонно растёт (см. .cpp), без
-    // отдельного сброса со временем насытилась бы в белое.
-    void resetAccumulation();
+    void resetAccumulation();   // обнуляет только m_accum, не волну/среду
 
-    // outGlow - нормализованная (Reinhard-подобная) яркость для рендера,
-    // затухает со временем (kGlowDecay). outMediumMask - для затемнения
-    // области призмы на экране (main.cpp). outAccum - копия накопительного
-    // буфера m_accum (см. его описание у поля) для режима "накопление"
-    // (main.cpp решает, каким буфером красить узел - glow или accum).
     void snapshot(std::vector<float>& outGlow, std::vector<float>& outMediumMask,
                   std::vector<float>& outAccum) const;
+
+    // Чтение готового кадра БЕЗ копирования - указатели живут в слоте, куда
+    // физика не пишет (см. kSlots). Дешевле snapshot() ровно на стоимость
+    // копии ~5.7МБ, которая и была основной платой за кадр.
+    struct View {
+        const float* glow = nullptr;
+        const float* mediumMask = nullptr;
+        const float* accum = nullptr;
+    };
+    View acquireView() const;
 
     int cols() const { return m_cols; }
     int rows() const { return m_rows; }
     float spacing() const { return m_spacing; }
-    // Мировое расстояние между соседними узлами по горизонтали/вертикали -
-    // нужно снаружи (main.cpp) для отбраковки вне-экранного диапазона
-    // строк/столбцов по AABB камеры (см. worldPos() в .cpp - та же формула,
-    // не дублируем её тут отдельной константой).
     float hexHorizSpacing() const;
     float hexVertSpacing() const;
 
@@ -128,29 +76,40 @@ private:
     int chunkNeighbors(int chunkCol, int chunkRow, int out[8]) const;
     void activateChunkAt(int nodeIndex);
     void activateChunksInWindow(int colLo, int colHi, int rowLo, int rowHi);
+    void publish();   // вызывать под m_mutex, см. слоты ниже
+    void syncChunkAcrossSlots(int rowLo, int rowHi, int colLo, int colHi);
 
     int m_cols, m_rows;
     float m_spacing;
 
     mutable std::mutex m_mutex;
     std::vector<float> m_height, m_velocity, m_force;
-    std::vector<float> m_mediumMask;      // 0..1, "плотность" призмы на узле
-    std::vector<uint8_t> m_pinned;        // край сетки - h всегда 0 (отражение)
-    std::vector<float> m_glow;
-    // Долгая выдержка: копит нормализованную (адаптивную к avgSpeed, см.
-    // .cpp) долю энергии узла каждый step(), никогда не затухает сама - тот
-    // же приём, что accumulatedLight в reference-проекте (Light-Simulation-JS,
-    // см. demo/light/README.md), но не завязана на сырую |height| напрямую,
-    // чтобы скорость насыщения не зависела от текущих значений
-    // waveSpeedSq/pluckStrength. Растёт монотонно, клэмпится при отображении
-    // (main.cpp), не здесь - reset() обнуляет.
-    std::vector<float> m_accum;
+    std::vector<float> m_mediumMask;   // рабочая копия, в неё пишет кисть
+    std::vector<uint8_t> m_pinned;
+
+    // Публикация для рендера - ротация слотов без копирования.
+    //
+    // Сначала snapshot() брал m_mutex, тот же, что step() держит весь шаг:
+    // рендер ждал шаг целиком, физика на следующем шаге ждала уже рендер.
+    // Промежуточный вариант (копия в отдельные буферы под коротким локом)
+    // рендер разблокировал, но физике стало ХУЖЕ: копия ~5.7МБ переехала на
+    // неё и продолжила вымывать кэш - платой был не лок, а сам трафик.
+    //
+    // Теперь копий нет вовсе. Физика пишет в слот m_writeSlot, читая
+    // предыдущий (затухание glow и EMA accum и так смотрят на прошлый кадр),
+    // затем публикует индекс одним atomic-store. Рендер берёт этот индекс и
+    // читает слот напрямую. Слотов три, а не два: физика уходит на два кадра
+    // вперёд, прежде чем вернуться к слоту, который сейчас читает рендер.
+    static constexpr int kSlots = 3;
+    std::vector<float> m_glowSlot[kSlots], m_accumSlot[kSlots], m_maskSlot[kSlots];
+    int m_writeSlot = 0;                  // только поток физики
+    std::atomic<int> m_readySlot{0};      // последний дописанный слот
+    int m_maskDirtyFrames = kSlots;       // маска меняется редко - разливаем по слотам
 
     int m_chunksX = 0, m_chunksY = 0, m_numChunks = 0;
     std::vector<uint8_t> m_chunkActive, m_chunkIdleFrames;
     std::vector<int> m_processChunks;
 
-    // Диагностика - та же схема, что в cloth-модели (SpringNetwork), см. её .h.
     std::atomic<float> m_lastAvgSpeed{0.0f};
     std::atomic<int> m_lastSubsteps{1};
 public:
