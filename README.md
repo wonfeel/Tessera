@@ -78,17 +78,30 @@ worker threads where the GL context isn't current.
 
 ## Benchmark
 
-Conway's rule, RTX 30-series, one chunk, 100 iterations. The GPU only pulls ahead once the field
-is big enough to hide the kernel-launch overhead:
+Conway's rule, one chunk, 200 iterations, median of 3 runs. Ryzen 5 5600 (6c/12t) + RTX 3060 Ti,
+**Release build**. The CPU column is **single-threaded**: `CpuLifeBackend` uses no threads and no
+SIMD, it walks one chunk start to finish on one thread. Cross-chunk parallelism is `TaskScheduler`'s
+job and is measured separately.
 
-| Chunk size | CPU          | CUDA           | Speedup |
-|------------|--------------|----------------|---------|
-| 256²       | 37 Mcells/s  | 351 Mcells/s   | 9.5×    |
-| 512²       | 35 Mcells/s  | 1230 Mcells/s  | 35×     |
-| 1024²      | 37 Mcells/s  | 2366 Mcells/s  | 64×     |
-| 2048²      | 37 Mcells/s  | 4034 Mcells/s  | 109×    |
+| Chunk size | CPU (1 thread) | CUDA          | Speedup |
+|------------|----------------|---------------|---------|
+| 256²       | 271 Mcells/s   | 335 Mcells/s  | 1.2×    |
+| 512²       | 281 Mcells/s   | 1085 Mcells/s | 3.9×    |
+| 1024²      | 283 Mcells/s   | 2281 Mcells/s | 8.1×    |
+| 2048²      | 281 Mcells/s   | 2967 Mcells/s | 10.6×   |
 
-Run it yourself: `Test_benchmark <chunkSize> <iterations>`.
+The interesting number here isn't the speedup, it's the break-even point: below ~512² the GPU
+barely wins, because the launch and the PCI-E round trip cost more than the work itself.
+
+This benchmark is **transfer-bound, not compute-bound** - the kernel only uses ~1.3% of the card's
+memory bandwidth, while host↔device copies eat about two thirds of each iteration. Full arithmetic,
+plus why an earlier version of this table claimed 109×, is in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+
+Thread pool, many chunks across 12 threads: **5.2×** at 800 chunks, and **0.64×** (slower!) on a
+single chunk - one chunk is one task is one thread, so the pool can only add overhead there.
+
+Run it yourself: `Test_benchmark <chunkSize> <iterations>` and `Test_batch_benchmark`.
 
 ---
 
@@ -141,9 +154,17 @@ Test_correctness    rule + .rle parser, and CPU vs CUDA byte-identical after 100
 Test_propagation    a glider must cross a chunk boundary intact
 Test_capture        deterministic GIF dump, used as a regression fingerprint
 Test_benchmark      CPU vs GPU throughput
+Test_batch_benchmark  thread-pool scaling: 1..800 chunks, single vs 12 threads
+Test_light_frame_profile  where a frame goes: splits sync overhead into
+                    field-mutex wait vs thread-pool competition, and measures
+                    the zero-copy render path against the snapshot one
 Test_thread_safety  thread-pool + chunk-store stress, meant to run under TSan
 tests/light_field_* regression + benchmarks for the wave field
 ```
+
+Measured output of all of these, with hardware and caveats, is committed in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md) - including one optimization that turned out to change
+nothing, and why.
 
 `Test_propagation` is the one I added after finding gliders were being clipped at chunk borders -
 it stamps a glider near a boundary and checks it comes out the other side with the right shape
